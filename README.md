@@ -23,15 +23,15 @@ Cursor-like mode switching for [DeepSeek Harness](https://github.com/deepseek-ai
 **From the Web UI** — Settings → Plugins → Add plugin, and paste either:
 
 ```
-https://github.com/YukimuraSol/dsh-cursor-modes
+github:YukimuraSol/dsh-cursor-modes
 ```
 
-or the package name, if you installed it from npm.
+or the package name once it is on npm.
 
 **From the CLI**
 
 ```bash
-dsh plugin --profile <your-profile> add https://github.com/YukimuraSol/dsh-cursor-modes
+dsh plugin --profile <your-profile> add github:YukimuraSol/dsh-cursor-modes
 ```
 
 Restart the instance afterwards — the Host half loads at boot.
