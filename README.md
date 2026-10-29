@@ -9,6 +9,14 @@ Cursor-like mode switching for [DeepSeek Harness](https://github.com/deepseek-ai
 - **Two gate backends** — follow the current session model, or point at a dedicated decision model (e.g. a local gateway).
 - **Plan mode** — persistent plan cards with an execution checklist.
 - **Per-mode tool policy** — the tool catalog changes with the mode; prompts are kept stable for request-cache reuse.
+- **Multitask mode** — a quota-gated delegation mode: the main thread hands work to background agents and asks for more quota with `request_more_edits` when it runs out.
+- **Checklist handover** — `subagent` and `subagent_fork` take a `todos` argument, and the child is told its starting checklist exactly once, in its first turn.
+- **`list_running_agent`** — a small companion to `list_agents` that lists only the children still running, so a parent with many finished children keeps a short answer.
+
+## What's new in 0.2.1
+
+- The approved checklist reaches the model **once**, as the opening notice of the turn the build starts — not as a per-step mirror of the UI's todo state. An unchanged list costs nothing; a changed one is a normal `todo_write`, not a new injected snapshot.
+- `list_running_agent` is registered by this plugin. It used to be patched into `@deepseek-ai/dsh-tool-subagent-control`, which any upgrade would have silently removed.
 
 ## Install
 
