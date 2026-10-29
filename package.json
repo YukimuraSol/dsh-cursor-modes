@@ -1,6 +1,6 @@
 {
   "name": "dsh-cursor-modes",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Cursor-style modes for the Harness web UI: plan mode, multitask quota, the create_plan / request_more_edits tools and the delegation gate. Since 0.2.1 it also owns the subagent todos handover: the `todos` parameter on `subagent` and `subagent_fork`, and the child todo seed that rides it.",
   "type": "module",
   "main": "lib/index.js",
@@ -52,24 +52,24 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-llm": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.2.0-rc.2",
-    "@deepseek-ai/schemastery": "^3.18.4",
     "js-yaml": "^4.1.0",
     "zod": "^4.4.3"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.7-rc.1 || ^0.2.0-rc.1"
+    "@deepseek-ai/dsh-system-prompt": "^0.1.7-rc.1 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.4"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
       "optional": true
     },
-    "@deepseek-ai/dsh-llm": {
+    "@deepseek-ai/dsh-system-prompt": {
       "optional": true
     },
-    "@deepseek-ai/dsh-system-prompt": {
+    "@deepseek-ai/dsh-llm": {
       "optional": true
     },
     "@deepseek-ai/dsh-tools": {
