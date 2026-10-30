@@ -1,4 +1,4 @@
 # Loader patch for the dsh-cursor-modes bundle: one row, named after the package.
 - insert:
-    - id: dsh-cursor-modes
+    - id: cursor-modes
       name: dsh-cursor-modes
