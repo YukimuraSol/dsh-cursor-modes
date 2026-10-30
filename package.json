@@ -1,6 +1,6 @@
 {
   "name": "dsh-cursor-modes",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "Cursor-style modes for the Harness web UI: plan mode, multitask quota, the create_plan / request_more_edits tools and the delegation gate. Since 0.2.1 it also owns the subagent todos handover: the `todos` parameter on `subagent` and `subagent_fork`, and the child todo seed that rides it.",
   "type": "module",
   "main": "lib/index.js",
