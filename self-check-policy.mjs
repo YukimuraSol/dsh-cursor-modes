@@ -103,7 +103,9 @@ const WITHOUT_TOOL =
 	"artifact's own tool: " + tick('create_plan') + ' for the plan document. Revision goes in place with ' +
 	tick('write') + ' or ' + tick('edit') + ': the plan\n' +
 	'document itself, or an existing ' + tick('~/.dsh/ui-blocks/*.uiblock') + '. Both are planning material.\n' +
-	'Everything else stays read-only.';
+	'Editing generated material under ' + tick('~/.dsh/ui-captures/') + ' is allowed as well: it is fetched\n' +
+	'output, not source, and an edit that never reaches disk breaks rebuilding the block from\n' +
+	'it. Everything else stays read-only.';
 const UI_CLAUSE = ', ' + tick('create_ui_block') + ' for a UI\ndraft under ' + tick('~/.dsh/ui-blocks/') + '.';
 const FULL_SENTENCE = WITHOUT_TOOL.replace('document. Revision', 'document' + UI_CLAUSE + ' Revision');
 
@@ -131,6 +133,13 @@ ok(
 	'the tool-free variant still allows REVISING an existing draft: that path is a rule, not a tool recommendation'
 );
 ok(WITHOUT_TOOL.includes('~/.dsh/ui-blocks/'), 'the tool-free variant still names the draft directory');
+	// Generated material (2026-11-11): the exemption says WHICH tree and WHY, in the
+	// same passive voice, and it belongs to the tool-free variant too — a capture is
+	// not created by any tool, so a deployment without create_ui_block may still
+	// write one.
+	ok(WITHOUT_TOOL.includes(tick('~/.dsh/ui-captures/')), 'both variants allow generated material under ui-captures');
+	ok(WITHOUT_TOOL.includes('output, not source'), '... and give the reason: it is fetched output, not source');
+	ok(WITHOUT_TOOL.includes('an edit that never reaches disk'), '... naming what a refused edit would cost: the missing on-disk copy');
 ok(WITHOUT_TOOL.includes(tick('create_plan')), 'the tool-free variant keeps the plan document half, which is always mounted');
 ok(WITHOUT_TOOL.endsWith('.'), 'the tool-free variant ends with a period');
 ok(

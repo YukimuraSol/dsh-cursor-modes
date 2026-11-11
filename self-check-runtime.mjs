@@ -650,6 +650,45 @@ eq(
 	'revising an existing .uiblock draft is allowed in plan mode'
 );
 
+// Generated material under <DSH_HOME>/ui-captures is a product, not source, so plan
+// mode lets write/edit touch it (2026-11-11). The boundary is the RESOLVED absolute
+// path: a `..` escape into ui-blocks and a lookalike sibling both stay blocked, and
+// a block is still rebuilt with create_ui_block rather than hand-edited.
+const captures = join(process.env.DSH_HOME, 'ui-captures');
+const captureFile = join(captures, 'pintia-exam', 'entry.html');
+eq(
+	await preExecuteHandler({ name: 'edit', arguments: { file_path: captureFile, old_string: 'a', new_string: 'b' }, agent: orderAgent }, next),
+	allowed,
+	'editing a generated capture under ui-captures is allowed in plan mode'
+);
+eq(
+	await preExecuteHandler({ name: 'write', arguments: { file_path: captureFile.toUpperCase(), content: 'x' }, agent: orderAgent }, next),
+	allowed,
+	'... and the upper-case spelling is the same directory on Windows, so folding case opens no hole'
+);
+const demoDenied = await preExecuteHandler(
+	{ name: 'edit', arguments: { file_path: join(process.env.DSH_HOME, 'ui-blocks', 'demo.uiblock'), old_string: 'a', new_string: 'b' }, agent: orderAgent },
+	next
+);
+eq(demoDenied?.kind, 'deny', 'a .uiblock on disk is still refused: a block is rebuilt with create_ui_block, not hand-edited');
+matches(demoDenied?.reason, /only planning material may be edited/, '... with the plan-mode sentence, unchanged');
+matches(demoDenied?.reason, /~\.dsh\/ui-captures\//, '... which names the one new exemption, so the refusal stays accurate');
+const escapeDenied = await preExecuteHandler(
+	{ name: 'edit', arguments: { file_path: join(captures, '..', 'ui-blocks', 'x.uiblock'), old_string: 'a', new_string: 'b' }, agent: orderAgent },
+	next
+);
+eq(escapeDenied?.kind, 'deny', 'ui-captures\\..\\ui-blocks\\x.uiblock resolves OUT of the exemption, so it is denied');
+const siblingDenied = await preExecuteHandler(
+	{ name: 'write', arguments: { file_path: join(process.env.DSH_HOME, 'ui-captures-x', 'a.html'), content: 'x' }, agent: orderAgent },
+	next
+);
+eq(siblingDenied?.kind, 'deny', 'ui-captures-x is a sibling, not a child: the prefix must end on a separator');
+const sourceDenied = await preExecuteHandler(
+	{ name: 'write', arguments: { file_path: 'D:\\work\\src\\index.js', content: 'x' }, agent: orderAgent },
+	next
+);
+eq(sourceDenied?.kind, 'deny', 'workspace source stays read-only: the exemption is a directory, not a mood');
+
 const orderGate = gateOf(orderAgent);
 eq(spentOf(orderGate), 0, 'the plan allow-side above never charged the multitask gate');
 // Fill the window the way the gate itself counts: LIMIT distinct serial roots.
