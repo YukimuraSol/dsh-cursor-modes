@@ -12,10 +12,11 @@
 //    naming create_ui_block in a deployment without that tool teaches the model to
 //    call a tool that does not exist; a prompt that loses the ~/.dsh/ui-blocks
 //    allowlist makes plan mode refuse the one write it is supposed to allow.
-//  * multi-prompt.js — MULTI_SECTION_TEAM is DERIVED from MULTI_SECTION by three
-//    splices, so the base must stay clean of team wording while the variant is the
-//    base plus exactly those tails. The reconstruction assertion at the end of that
-//    section fails the moment either copy is hand-edited.
+//  * multi-prompt.js — the Agent Teams variant of the multitask section is DERIVED
+//    from MODE_RULES by three splices, so the plain run must stay clean of team
+//    wording while the variant is that run plus exactly those tails. The
+//    reconstruction assertion at the end of that section fails the moment either
+//    copy is hand-edited.
 //  * build.js — "Build in Default" is byte-for-byte the pre-change message (its
 //    sha256 is frozen here) and "Build in Multi" is that message plus one handoff
 //    sentence. The two buttons carry different instructions, so drift between them
@@ -83,45 +84,45 @@ eq(typeof prompts.renderChecklist, 'function', 'and renderChecklist is the other
 // would keep the two in sync.
 ok(!Object.hasOwn(prompts, 'default'), 'prompts.js carries no default export');
 
-const MULTI_EXPORTS = ['BUDGET_RECEIPT', 'MULTI_ID', 'MULTI_SECTION', 'MULTI_SECTION_TEAM', 'budgetBrief', 'quotaToolDescription', 'withTeamTails'];
+const MULTI_EXPORTS = ['BUDGET_RECEIPT', 'MULTI_ID', 'budgetBrief', 'quotaToolDescription', 'withTeamTails'];
 eq(
 	Object.keys(multiPrompt).sort().join(','),
 	MULTI_EXPORTS.slice().sort().join(','),
-	'multi-prompt.js exports exactly the four constants plus the splice'
+	'multi-prompt.js exports exactly these five names'
 );
 ok(!Object.hasOwn(multiPrompt, 'TEAM_TAILS'), 'TEAM_TAILS stays private: the splices are an implementation detail');
-// BASE must be the derived one or the reconstruction below proves nothing.
-eq(typeof multiPrompt.MULTI_SECTION_TEAM, 'string', 'MULTI_SECTION_TEAM is exported already derived');
+// The team variant is DERIVED, and nothing exports a pre-built copy of it: withTeamTails
+// is the only seam, so there is no second constant for an edit to miss.
+ok(!Object.hasOwn(multiPrompt, 'MULTI_SECTION_TEAM'), 'no pre-built team constant is exported: the splice below is the only one');
 
 // ===========================================================================
 // 2. the write-exemption paragraph (the two variants and their one difference)
 // ===========================================================================
 // Spelled out rather than imported: a check that reads the constant it is
 // checking cannot notice the constant changing.
-const WITHOUT_TOOL =
-	'Two kinds of writes are not execution and are allowed. Creation goes through the\n' +
-	"artifact's own tool: " + tick('create_plan') + ' for the plan document. Revision goes in place with ' +
-	tick('write') + ' or ' + tick('edit') + ': the plan\n' +
-	'document itself, or an existing ' + tick('~/.dsh/ui-blocks/*.uiblock') + '. Both are planning material.\n' +
-	'Editing generated material under ' + tick('~/.dsh/ui-captures/') + ' is allowed as well: it is fetched\n' +
-	'output, not source, and an edit that never reaches disk breaks rebuilding the block from\n' +
-	'it. Everything else stays read-only.';
-const UI_CLAUSE = ', ' + tick('create_ui_block') + ' for a UI\ndraft under ' + tick('~/.dsh/ui-blocks/') + '.';
-const FULL_SENTENCE = WITHOUT_TOOL.replace('document. Revision', 'document' + UI_CLAUSE + ' Revision');
-
+const WITHOUT_TOOL = [
+	"Two kinds of writes are not execution and are allowed. **In plan mode, these writes are allowed:**",
+	'- ' + tick('create_plan') + ' — writes the plan document itself; the plan is the artifact, not a change to the system.',
+	'- ' + tick('edit') + ' — a targeted change to the plan document, an existing ' + tick('~/.dsh/ui-blocks/*.uiblock') + ', or generated material under ' + tick('~/.dsh/ui-captures/') + '.',
+	'- ' + tick('write') + ' — replaces one of those files.',
+	"Turning a page into a UI block is building that artifact, not executing the task: do it. Never answer that you cannot build while the marker reads plan, and never offer a plan in place of the block the user asked for. Capturing the material the block is assembled from is part of the same step, and that capture is fetched output rather than source: an edit that never reaches disk breaks rebuilding the block from it. When a block is already large, rebuilding it from the captured material is cheaper than editing the block file.",
+	"Both are planning material. Everything else stays read-only.",
+].join('\n');
+const UI_LINE = '- ' + tick('create_ui_block') + ' — builds a UI draft under ' + tick('~/.dsh/ui-blocks/') + '; a draft is planning material.\n';
+const FULL_SENTENCE = WITHOUT_TOOL.replace('- ' + tick('edit'), UI_LINE + '- ' + tick('edit'));
 eq(prompts.UI_BLOCK_SENTENCE_WITHOUT_TOOL, WITHOUT_TOOL, 'the tool-free exemption is verbatim');
 eq(prompts.UI_BLOCK_SENTENCE, FULL_SENTENCE, 'the full exemption is verbatim');
 // The teeth: one substitution is all the section needs to swap variants, so the
 // two strings may differ by that half-sentence and by nothing else.
 eq(
-	prompts.UI_BLOCK_SENTENCE.replace(UI_CLAUSE, '.'),
+	prompts.UI_BLOCK_SENTENCE.replace(UI_LINE, ''),
 	prompts.UI_BLOCK_SENTENCE_WITHOUT_TOOL,
-	'the two variants differ by exactly one half-sentence'
+	'the two variants differ by exactly one tool line'
 );
 eq(
-	count(prompts.UI_BLOCK_SENTENCE, UI_CLAUSE),
+	count(prompts.UI_BLOCK_SENTENCE, UI_LINE),
 	1,
-	'the removed half-sentence occurs once, so the swap cannot delete more than intended'
+	'the removed tool line occurs once, so the swap cannot delete more than intended'
 );
 ok(
 	prompts.UI_BLOCK_SENTENCE.includes(tick('create_ui_block')),
@@ -133,13 +134,12 @@ ok(
 	'the tool-free variant still allows REVISING an existing draft: that path is a rule, not a tool recommendation'
 );
 ok(WITHOUT_TOOL.includes('~/.dsh/ui-blocks/'), 'the tool-free variant still names the draft directory');
-	// Generated material (2026-11-11): the exemption says WHICH tree and WHY, in the
-	// same passive voice, and it belongs to the tool-free variant too — a capture is
-	// not created by any tool, so a deployment without create_ui_block may still
-	// write one.
+	// Generated material (2026-11-11): the exemption names WHICH tree and WHY, in the
+	// same passive voice, and it holds for the tool-free variant too — a capture is
+	// created by no tool, so a deployment without create_ui_block may still write one.
 	ok(WITHOUT_TOOL.includes(tick('~/.dsh/ui-captures/')), 'both variants allow generated material under ui-captures');
-	ok(WITHOUT_TOOL.includes('output, not source'), '... and give the reason: it is fetched output, not source');
-	ok(WITHOUT_TOOL.includes('an edit that never reaches disk'), '... naming what a refused edit would cost: the missing on-disk copy');
+	ok(WITHOUT_TOOL.includes('fetched output rather than source'), '... and give the reason: fetched output, not source');
+	ok(WITHOUT_TOOL.includes('an edit that never reaches disk'), '... naming what a refused edit would cost: the on-disk copy');
 ok(WITHOUT_TOOL.includes(tick('create_plan')), 'the tool-free variant keeps the plan document half, which is always mounted');
 ok(WITHOUT_TOOL.endsWith('.'), 'the tool-free variant ends with a period');
 ok(
@@ -147,7 +147,7 @@ ok(
 	'the tool-free variant still re-asserts read-only for everything else'
 );
 ok(WITHOUT_TOOL.includes('Both are planning material.'), 'the tool-free variant keeps its closing clause');
-eq(count(WITHOUT_TOOL, 'Two kinds of writes are not execution'), 1, 'the tool-free variant states the rule once');
+eq(count(WITHOUT_TOOL, 'these writes are allowed'), 1, 'the tool-free variant states the rule once');
 // Deleting a clause in the middle of a sentence is how edits leave a seam
 // ("...for the plan document Revision goes..."): assert the seam is gone.
 ok(!WITHOUT_TOOL.includes('document Revision'), 'deleting the half-sentence did not weld two sentences together');
@@ -191,7 +191,7 @@ ok(E.includes('via the subagent tool'), 'entry names this harness\'s subagent to
 ok(E.includes('the card links to it'), 'entry states the card links the plan body instead of pasting it');
 ok(E.includes('Do not paste the plan body into your reply'), 'entry forbids pasting the plan body');
 ok(E.includes('<mermaid_syntax>'), 'entry keeps the mermaid syntax block');
-ok(E.includes('exit_plan_mode'), 'entry tells the model not to reach for exit_plan_mode');
+ok(!E.includes('exit_plan_mode'), 'the entry no longer names a tool this deployment does not install');
 // 2026-10-24 (one plan section): the long delegation paragraph and the A1 rules
 // set left with the continuation. Rule 5 scopes subagents to read-only research,
 // and the only-way-out sentence moved INTO the entry set — with one section left
@@ -404,7 +404,7 @@ ok(
 );
 ok(E.includes('Do not use todo_write during planning'), 'item 9 keeps the checklist out of the planning pass');
 ok(E.includes('Keep the plan proportional to the request'), 'item 11 keeps the plan proportional');
-ok(E.includes('this deployment does not install it'), 'item 7 says exit_plan_mode is absent in this deployment');
+ok(!E.includes('this deployment does not install it'), 'the retired exit_plan_mode sentence stays out of the entry set');
 
 // ===========================================================================
 // 4. policyText — ONE answer, whatever the mode and whatever the header
@@ -443,18 +443,27 @@ eq(prompts.policyText('plan', 'plan').length, E.length, 'the answer is the const
 eq(prompts.policyText('plan', null).length, E.length, 'and the same answer measures the same');
 
 // ===========================================================================
-// 5. MULTI_ID / the multitask section and its derived team variant
+// 5. MULTI_ID / the multitask section of MODE_RULES and its derived team variant
 // ===========================================================================
-const OPENING = 'The user has engaged **Multitask Mode**.';
+// The multitask rules have exactly ONE home: the multitask section of prompts.js
+// MODE_RULES, which is what `cursorPlan:policy` (order 502) renders. A second copy
+// used to live in multi-prompt.js as MULTI_SECTION, feeding a `mode:policy` section
+// that renders '' — text that never reached the model while looking authoritative.
+// It is gone, so every assertion below slices the LIVE constant instead: what is
+// pinned here is the text the model actually reads.
+const RULES = prompts.MODE_RULES;
+const MULTI_HEAD = '## 当模式为 multitask 时';
+const MULTI_END = '\n\n</mode_rules>';
+const BASE = RULES.slice(RULES.indexOf(MULTI_HEAD), RULES.indexOf(MULTI_END));
+const TEAM = multiPrompt.withTeamTails(BASE);
+const OPENING = MULTI_HEAD;
 eq(multiPrompt.MULTI_ID, 'multi', 'MULTI_ID is the persisted mode id; renaming it orphans every session');
 eq(build.BUILD_TARGETS.multi, multiPrompt.MULTI_ID, 'the Build button and the mode id agree on "multi"');
 
-const BASE = multiPrompt.MULTI_SECTION;
-const TEAM = multiPrompt.MULTI_SECTION_TEAM;
-ok(BASE.startsWith(OPENING), 'MULTI_SECTION opens with the mode declaration');
-ok(TEAM.startsWith(OPENING), 'the team variant opens with the same declaration: splicing must not disturb it');
+ok(BASE.startsWith(OPENING), 'the multitask section opens with the heading that names its mode');
+ok(TEAM.startsWith(OPENING), 'the team variant opens with the same heading: splicing must not disturb it');
 eq(count(TEAM, OPENING), 1, 'the team variant announces the mode once, not twice');
-ok(BASE.length > 0, 'MULTI_SECTION is not empty');
+ok(BASE.length > 0, 'the multitask section is found in the constant, not empty');
 ok(TEAM.length > BASE.length, 'the team variant ADDS text; a shorter one means a tail overwrote something');
 ok(TEAM.length - BASE.length > 400, 'the three tails are all there, not just one');
 ok(BASE.includes(tick('subagent') + ' tool'), 'the section names this harness\'s subagent tool');
@@ -526,7 +535,7 @@ ok(TAIL_3.length < 200, 'tail 3 stays one sentence, not a paragraph');
 eq(
 	TEAM.split(TAIL_1).join('').split(TAIL_2).join('').split(TAIL_3).join(''),
 	BASE,
-	'stripping the three tails reconstructs MULTI_SECTION byte for byte'
+	'stripping the three tails reconstructs the multitask section byte for byte'
 );
 // The reconstruction only proves the tails were SPLICED; it says nothing about
 // what they say. Pin each one verbatim, or a reworded tail still reconstructs
@@ -558,9 +567,9 @@ ok(TEAM.indexOf(TAIL_3) > TEAM.indexOf(TAIL_1), 'the tails appear in the order t
 // through multi-prompt's own reducer — a re-typed anchor in a second place is how
 // the two definitions drift, and a missing splice is how a team deployment loses
 // the rules without anyone noticing.
-const RULES = prompts.MODE_RULES;
+// RULES is the const section 5 opened with: the same constant, not a second read.
 eq(typeof multiPrompt.withTeamTails, 'function', 'multi-prompt exports its splice, so callers reuse it instead of copying the anchors');
-eq(multiPrompt.withTeamTails(BASE), TEAM, 'the exported splice is exactly the one that produces MULTI_SECTION_TEAM');
+eq(multiPrompt.withTeamTails(BASE), TEAM, 'the exported splice is exactly the one that produces the team variant');
 const RULES_TEAM = multiPrompt.withTeamTails(RULES);
 ok(RULES_TEAM !== RULES, 'applying it to the merged constant actually changes the text');
 for (const anchor of [ANCHOR_SET_TO, ANCHOR_NOTIFY, ANCHOR_CEILING]) {
@@ -573,7 +582,7 @@ for (const tail of [TEAM_TAIL_1, TEAM_TAIL_2, TEAM_TAIL_3]) {
 }
 ok(RULES_TEAM.indexOf(TEAM_TAIL_1) > RULES_TEAM.indexOf(ANCHOR_SET_TO), 'the first merged tail lands after its own anchor');
 ok(RULES_TEAM.indexOf(TEAM_TAIL_2) > RULES_TEAM.indexOf(TEAM_TAIL_1), 'then the second');
-ok(RULES_TEAM.indexOf(TEAM_TAIL_3) > RULES_TEAM.indexOf(TEAM_TAIL_2), 'then the third, in the same order as MULTI_SECTION_TEAM');
+ok(RULES_TEAM.indexOf(TEAM_TAIL_3) > RULES_TEAM.indexOf(TEAM_TAIL_2), 'then the third, in the same splice order');
 eq(
 	RULES_TEAM.split(TEAM_TAIL_1).join('').split(TEAM_TAIL_2).join('').split(TEAM_TAIL_3).join(''),
 	RULES,
@@ -581,9 +590,6 @@ eq(
 );
 eq(RULES_TEAM.length - RULES.length, TEAM.length - BASE.length, 'the merged variant grows by exactly the same number of characters');
 
-// ===========================================================================
-// 6. BUDGET_RECEIPT — the mode-on sentence, pinned verbatim
-// ===========================================================================
 // ===========================================================================
 // 6. BUDGET_RECEIPT — the mode-on sentence, pinned verbatim
 // ===========================================================================

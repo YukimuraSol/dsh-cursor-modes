@@ -213,6 +213,14 @@ function makeContext(settingsService) {
 			if (captured.injectedWith === undefined) captured.injectedWith = [...names];
 			captured.injects.push([...names]);
 			callback(host);
+		},
+		// Two things `apply()` itself needs since the preset derivation: the service
+		// it declares in `apply.inject`, and `effect` for the registration disposer.
+		// This `effect` deliberately does NOT touch `captured.effects`: that counter
+		// is asserted to be exactly the two bridge groups below.
+		agentPresets: { register: async () => async () => {} },
+		effect(fn) {
+			fn();
 		}
 	};
 	return { ctx, captured, logged, host };
@@ -652,8 +660,8 @@ eq(
 
 // Generated material under <DSH_HOME>/ui-captures is a product, not source, so plan
 // mode lets write/edit touch it (2026-11-11). The boundary is the RESOLVED absolute
-// path: a `..` escape into ui-blocks and a lookalike sibling both stay blocked, and
-// a block is still rebuilt with create_ui_block rather than hand-edited.
+// path: a `..` escape into ui-blocks and a lookalike sibling both stay blocked, and a
+// block is still rebuilt with create_ui_block rather than hand-edited.
 const captures = join(process.env.DSH_HOME, 'ui-captures');
 const captureFile = join(captures, 'pintia-exam', 'entry.html');
 eq(
@@ -670,9 +678,9 @@ const demoDenied = await preExecuteHandler(
 	{ name: 'edit', arguments: { file_path: join(process.env.DSH_HOME, 'ui-blocks', 'demo.uiblock'), old_string: 'a', new_string: 'b' }, agent: orderAgent },
 	next
 );
-eq(demoDenied?.kind, 'deny', 'a .uiblock on disk is still refused: a block is rebuilt with create_ui_block, not hand-edited');
+eq(demoDenied?.kind, 'deny', 'a block is still refused: it is rebuilt with create_ui_block, never hand-edited');
 matches(demoDenied?.reason, /only planning material may be edited/, '... with the plan-mode sentence, unchanged');
-matches(demoDenied?.reason, /~\.dsh\/ui-captures\//, '... which names the one new exemption, so the refusal stays accurate');
+matches(demoDenied?.reason, /~\/\.dsh\/ui-captures\//, '... which names the one new exemption, so the refusal stays accurate');
 const escapeDenied = await preExecuteHandler(
 	{ name: 'edit', arguments: { file_path: join(captures, '..', 'ui-blocks', 'x.uiblock'), old_string: 'a', new_string: 'b' }, agent: orderAgent },
 	next
@@ -831,30 +839,48 @@ await assert.rejects(async () => planTool.execute({ plan: 'no heading here' }, {
 await assert.rejects(async () => planTool.execute({ plan: '   ' }, {}), /starting with a # heading/);
 passed += 2;
 
-// --- planDoc after a successful .plan.md write ------------------------------
+// --- planDoc: the CALL's mount, before the turn's closing reply ---------------
 const docSession = makeSession(captured, 's-doc');
 const docAgent = makeAgent(docSession);
 docSession.append(MODE_EVENT, { mode: 'plan' });
 docSession.projected.set('turnBoundary', { openTurnStartSeq: null, lastTurn: 3 });
 const revised = '# Add install docs\n\nRevised body.\n';
-writeFileSync(result.path, revised, 'utf8');
 const beforeDoc = docSession.appended.length;
 const postAccept = { kind: 'accept' };
-const postDecision = await postExecute(
-	{ name: 'write', arguments: { file_path: result.path, content: revised }, agent: docAgent },
-	{ isError: false, content: [] },
+// One simulated call: pre-execute stamps the window's t0, the tool changes the
+// disk, post-execute decides what to mount.
+const preDoc = (name, args) => preExecuteHandler(
+	{ name, arguments: args, agent: docAgent },
 	async () => postAccept
 );
-eq(postDecision, postAccept, 'post-execute hands the decision on untouched');
-eq(docSession.appended.length, beforeDoc + 1, 'post-execute appends exactly one planDoc');
+const postDoc = (name, args, value) => postExecute(
+	{ name, arguments: args, agent: docAgent },
+	{ isError: false, content: [], value },
+	async () => postAccept
+);
+// Claim source A: create_plan's own return value names the file it wrote.
+await preDoc('create_plan', {});
+writeFileSync(result.path, revised, 'utf8');
+await postDoc('create_plan', {}, { title: 'Add install docs', path: result.path, todos: [] });
+eq(docSession.appended.length, beforeDoc + 1, 'the call that wrote the plan appends exactly one planDoc');
 same(docSession.appended.at(-1), { type: PLAN_DOC_RECORD, data: { turn: 3, path: result.path, plan: revised } }, 'the planDoc is the plugin:cursormodes/plandoc record and carries turn, path and body');
+// A second write in the SAME turn appends a second record: the client keeps one
+// card per turn and shows the last record before the closing reply.
+await preDoc('write', { file_path: result.path });
+const revised2 = revised + 'Second pass.\n';
+writeFileSync(result.path, revised2, 'utf8');
+const writeDecision = await postDoc('write', { file_path: result.path, content: revised2 }, undefined);
+eq(writeDecision, postAccept, 'post-execute hands the decision on untouched');
+eq(docSession.appended.length, beforeDoc + 2, 'a second write in the same turn appends a second planDoc');
+eq(docSession.appended.at(-1)?.data?.plan, revised2, 'the later record carries the later body');
 // Non-plan markdown must not publish: only a *.plan.md is the plan document.
-await postExecute(
-	{ name: 'write', arguments: { file_path: join(fakeHome, 'notes.md'), content: 'x' }, agent: docAgent },
-	{ isError: false, content: [] },
-	async () => postAccept
-);
-eq(docSession.appended.length, beforeDoc + 1, 'notes.md publishes no planDoc');
+// The 3 ms gap is the real one: two tool calls are never in the same ms, and
+// the window is stamped with Date.now()'s integer.
+await new Promise((resolve) => setTimeout(resolve, 3));
+await preDoc('write', { file_path: join(fakeHome, 'notes.md') });
+writeFileSync(join(fakeHome, 'notes.md'), 'x', 'utf8');
+await postDoc('write', { file_path: join(fakeHome, 'notes.md'), content: 'x' }, undefined);
+eq(docSession.appended.length, beforeDoc + 2, 'notes.md publishes no planDoc');
 
 // --- the Build bridge is the only build path --------------------------------
 eq(planSection?.text({ agent }), MODE_RULES, 'still the same section before the build');

@@ -1,7 +1,9 @@
 {
   "name": "dsh-cursor-modes",
   "version": "0.2.10",
+  "private": true,
   "description": "Cursor-style modes for the Harness web UI: plan mode, multitask quota, the create_plan / request_more_edits tools and the delegation gate. Since 0.2.1 it also owns the subagent todos handover: the `todos` parameter on `subagent` and `subagent_fork`, and the child todo seed that rides it.",
+  "//": "Frozen vendored copy: never run npm install / npm ci here. A lockfile would negotiate the aligned 0.2.0-rc.2 packages back to 0.1.5-rc.2 and silently break the host. To change a dependency, copy the whole node_modules tree from the host instead.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -10,45 +12,39 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib/*.js",
-    "cordis.patch.yml",
-    "README.md",
-    "LICENSE"
+    "lib/index.js",
+    "lib/client.js",
+    "lib/state.js",
+    "lib/projection.js",
+    "lib/plan.js",
+    "lib/multi.js",
+    "lib/switch.js",
+    "lib/routes.js",
+    "lib/settings.js",
+    "lib/gate.js",
+    "lib/prompts.js",
+    "lib/multi-prompt.js",
+    "lib/build.js",
+    "lib/planfile.js",
+    "lib/delegation-gate.js",
+    "lib/gate-settings.js",
+    "lib/create-plan-fold.js",
+    "lib/cursor-plan.js",
+    "lib/subagent-todos.js",
+    "lib/list-running-agent.js"
   ],
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/YukimuraSol/dsh-cursor-modes.git"
-  },
-  "homepage": "https://github.com/YukimuraSol/dsh-cursor-modes#readme",
-  "bugs": {
-    "url": "https://github.com/YukimuraSol/dsh-cursor-modes/issues"
-  },
-  "keywords": [
-    "dsh",
-    "deepseek-harness",
-    "plugin",
-    "cursor",
-    "modes",
-    "plan-mode",
-    "delegation"
-  ],
-  "engines": {
-    "node": ">=20"
-  },
   "dsh": {
-    "manifestVersion": 1,
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-api-remotes",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-tool"
-      ]
+      ],
+      "platform": "web"
     }
   },
   "dependencies": {
@@ -57,8 +53,8 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.7-rc.1 || ^0.2.0-rc.1",
     "@deepseek-ai/dsh-llm": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.7-rc.1 || ^0.2.0-rc.1",
     "@deepseek-ai/dsh-tools": "^0.2.0-rc.2",
     "@deepseek-ai/schemastery": "^3.18.4"
   },
@@ -66,10 +62,10 @@
     "@deepseek-ai/cordis": {
       "optional": true
     },
-    "@deepseek-ai/dsh-system-prompt": {
+    "@deepseek-ai/dsh-llm": {
       "optional": true
     },
-    "@deepseek-ai/dsh-llm": {
+    "@deepseek-ai/dsh-system-prompt": {
       "optional": true
     },
     "@deepseek-ai/dsh-tools": {
@@ -78,6 +74,5 @@
     "@deepseek-ai/schemastery": {
       "optional": true
     }
-  },
-  "author": "YukimuraSol"
+  }
 }

@@ -1,4 +1,6 @@
-# Loader patch for the dsh-cursor-modes bundle: one row, named after the package.
+# dsh-cursor-modes bundle layer: one row mounts the plugin; the profile layer's
+# \`- id: cursor-modes\` override row still supplies the editable \`gate\` config, so the
+# settings card keeps writing into the profile patch.
 - insert:
     - id: cursor-modes
-      name: dsh-cursor-modes
+      name: 'dsh-cursor-modes'

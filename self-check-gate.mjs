@@ -10,7 +10,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const lib = resolve(here, 'lib');
 
 const g = await import(pathToFileURL(resolve(lib, 'gate.js')).href);
-const { MULTI_ID, MULTI_SECTION, BUDGET_RECEIPT } = await import(pathToFileURL(resolve(lib, 'multi-prompt.js')).href);
+const { MULTI_ID, BUDGET_RECEIPT } = await import(pathToFileURL(resolve(lib, 'multi-prompt.js')).href);
+// The multitask wording lives in prompts.js MODE_RULES — the one constant
+// `cursorPlan:policy` renders. There is no second copy to check any more.
+const { MODE_RULES } = await import(pathToFileURL(resolve(lib, 'prompts.js')).href);
 // The merged plugin writes ONE mode event, `cursormodes/state` — not the two it
 // inherited. The fake session below folds appends into its mode log, so it has
 // to listen for the name the plugin actually emits; read it from the projection
@@ -75,20 +78,20 @@ function spend(state, id, extra = {}) {
 	const r = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9', 'c10', 'c11', 'c12'].map((id) => spend(s, id));
 	ok(r[0].kind === 'allow', 'edit 1 of the window passes silently — the budget was said at the wake');
 	ok(r[1].kind === 'allow', 'edit 2 passes silently');
-	ok(r[9].kind === 'notify', 'edit 10 notifies: it spends the last of the quota');
-	ok(r[10].kind === 'deny', 'edit 11 refused');
-	ok(r[11].kind === 'deny', 'edit 12 refused too');
-	ok(g.spentOf(s) === 10, 'ten edits charged');
-	ok(!r[0].carries && r[9].carries, 'the notice rides only the last edit');
+	ok(r[g.LIMIT - 1].kind === 'notify', 'the tenth edit notifies: it spends the last of the quota');
+	ok(r[g.LIMIT].kind === 'deny', 'the eleventh edit is refused');
+	ok(r[g.LIMIT + 1].kind === 'deny', 'and the twelfth is refused too');
+	ok(g.spentOf(s) === g.LIMIT, 'the whole base window was charged');
+	ok(!r[0].carries && r[g.LIMIT - 1].carries, 'the notice rides only the last edit');
 	ok(!r[1].carries, 'and never the silent second edit');
-	ok(!r[10].carries && !r[11].carries, 'a refused edit carries no notice of its own');
+	ok(!r[g.LIMIT].carries && !r[g.LIMIT + 1].carries, 'a refused edit carries no notice of its own');
 	ok(r[0].attached === undefined && r[0].text === undefined, 'the first edit hands back no copy at all');
-	ok(r[9].attached === g.blockedText(), 'the last edit carries the exhaustion copy verbatim');
+	ok(r[g.LIMIT - 1].attached === g.blockedText(), 'the last edit carries the exhaustion copy verbatim');
 	ok(g.blockedText() === EXHAUST_COPY, 'and that copy is the pre-existing gate text, byte for byte');
-	ok(r[9].text === EXHAUST_COPY, 'the verdict hands that copy to the caller');
+	ok(r[g.LIMIT - 1].text === EXHAUST_COPY, 'the verdict hands that copy to the caller');
 	ok(r[1].text === undefined, 'a silent edit hands back no copy at all');
-	ok(g.spentOf(s) === 10, 'a refused edit is not charged');
-	ok(r[10].reason === g.denyReason(), 'and what it hands back is the full rulebook');
+	ok(g.spentOf(s) === g.LIMIT, 'a refused edit is not charged');
+	ok(r[g.LIMIT].reason === g.denyReason(), 'and what it hands back is the full rulebook');
 	// The budget is stated at the wake itself, not on the first edit.
 	const wake = g.initState();
 	ok(g.wakeNoticeText(wake) === WAKE_COPY, 'the wake brief is byte for byte the pinned copy');
@@ -101,11 +104,11 @@ function spend(state, id, extra = {}) {
 {
 	const s = g.initState();
 	turn(s, 1, 'user');
-	for (const id of ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9', 'c10']) g.decideEdit(edit(id), { mode: MULTI_ID, state: s });
+	for (let n = 1; n <= g.LIMIT; n += 1) g.decideEdit(edit('c' + n), { mode: MULTI_ID, state: s });
 	g.clearNotice(s);
-	const v = g.decideEdit(edit('c11'), { mode: MULTI_ID, state: s });
+	const v = g.decideEdit(edit('c' + (g.LIMIT + 1)), { mode: MULTI_ID, state: s });
 	ok(v.kind === 'deny', 'refused');
-	// `?? ''` on purpose: a mutation that lets the eleventh edit through must fail
+	// `?? ''` on purpose: a mutation that lets an edit past the window through must fail
 	// as a named assertion here, not as a TypeError from reading `reason`.
 	ok((v.reason ?? '').startsWith(DENY_PREFIX), 'refusal opens with the gate identity');
 	ok((v.reason ?? '').endsWith(g.blockedText()), 'refusal repeats the blocked copy verbatim');
@@ -128,14 +131,14 @@ function spend(state, id, extra = {}) {
 	ok(four.deny.startsWith("This is multi mode's tool-call gate, not a broken tool. "), 'the refusal opens with the prefix');
 	ok(four.deny.includes(four.notice), 'the refusal carries the notice verbatim');
 	ok(four.deny === "This is multi mode's tool-call gate, not a broken tool. " + four.notice, 'the refusal is exactly prefix + notice, nothing else');
-	ok(four.notice.includes('adds 5 more'), 'the notice states the grant size in words');
+	ok(four.notice.includes('adds ' + g.GRANT + ' more'), 'the notice states the grant size in words');
 	ok(four.notice.includes('request_more_edits'), 'the notice names the tool');
 	ok(four.notice.includes('subagent'), 'the notice points at delegation');
 	ok(four.notice.includes('why you are not delegating') && four.notice.includes('how far you will take it yourself'), 'the blocked copy asks for both halves');
 	ok(four.notMulti.includes('only applies in multi mode'), 'the non-multi answer names the mode it needs');
 	ok(four.notMulti.includes('nothing was granted'), 'the non-multi answer says nothing was granted');
 	ok(four.blank.includes('`reason`'), 'the blank-reason answer names the field');
-	ok(g.grantedReason(5) === 'Granted: 5 more calls in this stretch.', 'the approval copy is English and states the size');
+	ok(g.grantedReason(g.GRANT) === 'Granted: ' + g.GRANT + ' more calls in this stretch.', 'the approval copy is English and states the size');
 }
 
 // --- what a window says, and how often: the brief at the wake, once at the end ---
@@ -147,7 +150,7 @@ function spend(state, id, extra = {}) {
 	ok(w1.kind === 'allow', 'the first edit of a window passes silently');
 	ok(!w1.carries && w1.text === undefined, 'and carries no notice of its own');
 	const first = g.wakeNoticeText(s);
-	ok(first.startsWith('Multi mode: your tool-call budget for this stretch has been refreshed — 10 calls.'), 'the wake brief opens with the refreshed budget');
+	ok(first.startsWith('Multi mode: your tool-call budget for this stretch has been refreshed — ' + g.LIMIT + ' calls.'), 'the wake brief opens with the refreshed budget');
 	ok(first.includes('A stretch ends and the count resets when the user speaks'), 'it states the refresh rules');
 	ok(first.includes('a goal or schedule wake opens a new turn but keeps the count'), 'and that a timer wake does not reset the count');
 	ok(first.includes('request_more_edits'), 'and names the way to ask for quota');
@@ -160,16 +163,14 @@ function spend(state, id, extra = {}) {
 	ok(!g.takesNotice(s, edit('w2')), 'nothing is left pending for it either');
 
 	// 3. the tenth edit spends the last of the quota, so it warns with the old copy
-	const w3 = spend(s, 'w3');
-	ok(w3.kind === 'allow', 'the third edit is still silent');
-	ok(spend(s, 'w4').kind === 'allow', 'the fourth edit is still silent');
-	for (const id of ['w5', 'w6', 'w7', 'w8', 'w9']) ok(spend(s, id).kind === 'allow', `the middle edit ${id} is silent`);
-	const w10 = spend(s, 'w10');
-	ok(w10.kind === 'notify', 'the tenth edit notifies: the quota is now spent');
-	ok(w10.text === g.blockedText(), 'with the exhaustion copy, not the opening one');
-	ok(w10.text === EXHAUST_COPY, 'which is the pre-existing gate text, byte for byte');
-	ok(w10.text !== first, 'so a window opens and closes on two different sentences');
-	ok(w10.carries && g.pendingNoticeText(s) === EXHAUST_COPY, 'and the exhaustion copy is what the caller renders');
+	ok(spend(s, 'w3').kind === 'allow', 'the third edit is still silent');
+	ok(['w4', 'w5', 'w6', 'w7', 'w8', 'w9'].every((id) => spend(s, id).kind === 'allow'), 'every middle edit of the window is silent');
+	const w3 = spend(s, 'w10');
+	ok(w3.kind === 'notify', 'the tenth edit notifies: the quota is now spent');
+	ok(w3.text === g.blockedText(), 'with the exhaustion copy, not the opening one');
+	ok(w3.text === EXHAUST_COPY, 'which is the pre-existing gate text, byte for byte');
+	ok(w3.text !== first, 'so a window opens and closes on two different sentences');
+	ok(w3.carries && g.pendingNoticeText(s) === EXHAUST_COPY, 'and the exhaustion copy is what the caller renders');
 
 	// 4. the refused edit is silent, and the refusal carries the whole rulebook
 	const refused = g.decideEdit(edit('w11'), { mode: MULTI_ID, state: s });
@@ -177,7 +178,7 @@ function spend(state, id, extra = {}) {
 	ok(!g.takesNotice(s, edit('w11')), 'a refused edit never notifies');
 	ok(refused.reason === g.denyReason(), 'the refusal is the full rulebook');
 	ok(refused.reason === DENY_PREFIX + EXHAUST_COPY, 'whose text is unchanged and byte-identical');
-	ok(g.spentOf(s) === 10, 'a refusal charges nothing');
+	ok(g.spentOf(s) === g.LIMIT, 'a refusal charges nothing');
 
 	// 5. a refresh re-arms the exhaustion notice: per window, not per session
 	turn(s, 2, 'user');
@@ -185,14 +186,12 @@ function spend(state, id, extra = {}) {
 	ok(g.pendingNoticeText(s) === undefined, 'and drops the previous window\'s copy');
 	const x1 = spend(s, 'x1');
 	ok(x1.kind === 'allow', 'its first edit is silent again');
-	ok(g.wakeNoticeText(s).includes('refreshed — 10 calls'), 'the new window brief counts from the base quota, not from 11');
-	ok(!g.wakeNoticeText(s).includes('refreshed — 11 calls'), 'and never the running total');
+	ok(g.wakeNoticeText(s).includes('refreshed — ' + g.LIMIT + ' calls'), 'the new window brief counts from the base quota');
+	ok(!g.wakeNoticeText(s).includes('refreshed — ' + (g.LIMIT + 1) + ' calls'), 'and never the running total');
 	ok(spend(s, 'x2').kind === 'allow', 'its second edit is silent');
-	ok(spend(s, 'x3').kind === 'allow', 'its third edit is silent');
-	ok(spend(s, 'x4').kind === 'allow', 'its fourth edit is silent');
-	for (const id of ['x5', 'x6', 'x7', 'x8', 'x9']) ok(spend(s, id).kind === 'allow', `its middle edit ${id} is silent`);
-	const x10 = spend(s, 'x10');
-	ok(x10.kind === 'notify' && x10.text === EXHAUST_COPY, 'and its tenth edit warns about the quota again');
+	ok(['x3', 'x4', 'x5', 'x6', 'x7', 'x8', 'x9'].every((id) => spend(s, id).kind === 'allow'), 'its middle edits are silent');
+	const x3 = spend(s, 'x10');
+	ok(x3.kind === 'notify' && x3.text === EXHAUST_COPY, 'and its tenth edit warns about the quota again');
 	ok(spend(s, 'x11').kind === 'deny', 'so a refreshed window is refused on its eleventh edit');
 
 	// 6. asking before the window is spent is refused, and changes nothing
@@ -201,28 +200,26 @@ function spend(state, id, extra = {}) {
 	const early = g.decideRequest({ mode: MULTI_ID, reason: 'the ledger migration needs my context', spent: g.spentOf(s6), quota: g.quotaOf(s6) });
 	ok(early.granted === false && early.note === 'quota-not-spent', 'asking before the first edit is refused');
 	ok(early.extra === 0, 'and banks nothing');
-	ok(g.spentOf(s6) === 0 && g.quotaOf(s6) === 10, 'so the window is still the base ten, unspent');
+	ok(g.spentOf(s6) === 0 && g.quotaOf(s6) === g.LIMIT, 'so the window is still the base quota, unspent');
 	const o1 = spend(s6, 'o1');
 	ok(o1.kind === 'allow', 'and its first edit is still silent');
 	ok(spend(s6, 'o2').kind === 'allow', 'its second edit is still silent');
-	ok(spend(s6, 'o3').kind === 'allow', 'its third edit is still silent');
-	ok(spend(s6, 'o4').kind === 'allow', 'its fourth edit is still silent');
-	for (const id of ['o5', 'o6', 'o7', 'o8', 'o9']) ok(spend(s6, id).kind === 'allow', `its middle edit ${id} is silent`);
-	const o10 = spend(s6, 'o10');
-	ok(o10.kind === 'notify' && o10.text === EXHAUST_COPY, 'and its tenth still warns that the quota is gone');
+	ok(['o3', 'o4', 'o5', 'o6', 'o7', 'o8', 'o9'].every((id) => spend(s6, id).kind === 'allow'), 'its middle edits are silent');
+	const o3 = spend(s6, 'o10');
+	ok(o3.kind === 'notify' && o3.text === EXHAUST_COPY, 'and its tenth still warns that the quota is gone');
 	const late = g.decideRequest({ mode: MULTI_ID, reason: 'the remainder genuinely cannot go to a subagent', spent: g.spentOf(s6), quota: g.quotaOf(s6) });
-	ok(late.granted === true && late.extra === 5, 'once the window is spent, the same request is granted');
+	ok(late.granted === true && late.extra === g.GRANT, 'once the window is spent, the same request is granted');
 	g.grantExtra(s6, late.extra);
 	const earlyAgain = g.decideRequest({ mode: MULTI_ID, reason: 'the remainder genuinely cannot go to a subagent', spent: g.spentOf(s6), quota: g.quotaOf(s6) });
 	ok(earlyAgain.granted === false && earlyAgain.note === 'quota-not-spent', 'and the granted window is unspent again, so asking again is refused');
-	ok(earlyAgain.spent === 10 && earlyAgain.quota === 15, 'the refusal reports 10 of 15 used');
-	ok(g.decideRequest({ mode: MULTI_ID, reason: 'r', spent: 15, quota: 15 }).granted === true, 'and the cycle opens again once the grant is spent');
+	ok(earlyAgain.spent === g.LIMIT && earlyAgain.quota === g.LIMIT + g.GRANT, 'the refusal reports the base window of the granted quota');
+	ok(g.decideRequest({ mode: MULTI_ID, reason: 'r', spent: g.LIMIT + g.GRANT, quota: g.LIMIT + g.GRANT }).granted === true, 'and the cycle opens again once the grant is spent');
 
 	// 7. a grant is not a refresh: it adds quota, it does not restate the budget
 	const s2 = g.initState();
 	turn(s2, 1, 'user');
 	g.grantExtra(s2, g.GRANT);
-	ok(g.quotaOf(s2) === 15, 'the grant banked a surplus');
+	ok(g.quotaOf(s2) === g.LIMIT + g.GRANT, 'the grant banked a surplus');
 	const y1 = spend(s2, 'y1');
 	ok(y1.kind === 'allow', 'the first edit after a grant is silent — a grant is not a wake, so no second brief');
 	ok(g.spentOf(s2) === 1, 'and the count carried on instead of resetting');
@@ -262,8 +259,10 @@ function spend(state, id, extra = {}) {
 		ok(turn(s5, 2, source) === true, `${source} resets the window`);
 		ok(g.decideEdit(edit('q2'), { mode: MULTI_ID, state: s5 }).kind === 'allow', `${source} opens a silent window — the brief belongs to the wake, not to an edit`);
 		g.clearNotice(s5);
-		for (const id of ['q3', 'q4', 'q5', 'q6', 'q7', 'q8', 'q9', 'q10']) spend(s5, id);
-		ok(g.decideEdit(edit('q11'), { mode: MULTI_ID, state: s5 }).kind === 'notify', `${source} re-arms the exhaustion notice`);
+		ok(spend(s5, 'q3').kind === 'allow', `${source} keeps counting through the refreshed window`);
+		ok(['q4', 'q5', 'q6', 'q7', 'q8', 'q9'].every((id) => spend(s5, id).kind === 'allow'), `${source} keeps counting through the middle of the window`);
+		ok(spend(s5, 'q10').kind === 'allow', `${source} keeps counting up to the last unit`);
+		ok(spend(s5, 'q11').kind === 'notify', `${source} re-arms the exhaustion notice`);
 		g.clearNotice(s5);
 	}
 }
@@ -275,9 +274,7 @@ function spend(state, id, extra = {}) {
 	turn(s, 1, 'user');
 	const o = spend(s, 'i1');
 	ok(spend(s, 'i2').kind === 'allow', 'the middle edit is silent');
-	ok(spend(s, 'i3').kind === 'allow', 'the third edit is silent');
-	ok(spend(s, 'i4').kind === 'allow', 'the fourth edit is silent');
-	for (const id of ['i5', 'i6', 'i7', 'i8', 'i9']) ok(spend(s, id).kind === 'allow', `the middle edit ${id} is silent`);
+	ok(['i3', 'i4', 'i5', 'i6', 'i7', 'i8', 'i9'].every((id) => spend(s, id).kind === 'allow'), 'every middle edit of the window is silent');
 	const e = spend(s, 'i10');
 	ok(o.kind === 'allow', 'the opening edit says nothing: only the wake speaks');
 	ok(e.kind === 'notify', 'and the last edit still notifies');
@@ -286,15 +283,13 @@ function spend(state, id, extra = {}) {
 	// and the exhaustion latch must not consume the next window's trigger
 	const s2 = g.initState();
 	turn(s2, 1, 'user');
-	for (const id of ['j1', 'j2', 'j3', 'j4', 'j5', 'j6', 'j7', 'j8', 'j9', 'j10']) g.decideEdit(edit(id), { mode: MULTI_ID, state: s2 });
+	for (let n = 1; n <= g.LIMIT; n += 1) g.decideEdit(edit('j' + n), { mode: MULTI_ID, state: s2 });
 	g.clearNotice(s2);
 	ok(turn(s2, 2, 'user') === true, 'the refresh resets the window');
 	const open2 = spend(s2, 'k1');
 	ok(open2.kind === 'allow', 'the refreshed window opens silently');
 	ok(spend(s2, 'k2').kind === 'allow', 'and its second edit is silent');
-	ok(spend(s2, 'k3').kind === 'allow', 'and its third and fourth edits are silent');
-	ok(spend(s2, 'k4').kind === 'allow', 'and its fourth edit is silent');
-	for (const id of ['k5', 'k6', 'k7', 'k8', 'k9']) ok(spend(s2, id).kind === 'allow', `and its middle edit ${id} is silent`);
+	ok(['k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9'].every((id) => spend(s2, id).kind === 'allow'), 'and its middle edits are silent');
 	const exh2 = spend(s2, 'k10');
 	ok(exh2.kind === 'notify' && exh2.text === EXHAUST_COPY, 'and it still warns again when it runs out');
 	ok(spend(s2, 'k11').kind === 'deny', 'and is refused after that');
@@ -307,20 +302,18 @@ function spend(state, id, extra = {}) {
 	const c1 = spend(s, 'c1');
 	ok(c1.kind === 'allow', 'the window opens silently — the brief was the wake step');
 	ok(spend(s, 'c2').kind === 'allow', 'the second edit is silent');
-	ok(spend(s, 'c3').kind === 'allow', 'the third edit is silent');
-	ok(spend(s, 'c4').kind === 'allow', 'the fourth edit is silent');
-	for (const id of ['c5', 'c6', 'c7', 'c8', 'c9']) ok(spend(s, id).kind === 'allow', `the middle edit ${id} is silent`);
-	const c10 = spend(s, 'c10');
-	ok(c10.kind === 'notify' && c10.text === EXHAUST_COPY, 'and the tenth spends the quota, warning with the old copy');
+	ok(['c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9'].every((id) => spend(s, id).kind === 'allow'), 'the middle edits are silent');
+	const c3 = spend(s, 'c10');
+	ok(c3.kind === 'notify' && c3.text === EXHAUST_COPY, 'and the tenth spends the quota, warning with the old copy');
 	ok(g.decideEdit(edit('c11'), { mode: MULTI_ID, state: s }).kind === 'deny', 'refused before the grant');
 	g.grantExtra(s, g.GRANT);
-	ok(g.quotaOf(s) === 15, 'a grant raises the quota to 15');
+	ok(g.quotaOf(s) === g.LIMIT + g.GRANT, 'a grant raises the quota by GRANT');
 	ok(g.reviewRequest('the migration touches the live ledger, a subagent would need my context') === true, 'a real reason is approved');
-	// The grant re-arms the exhaustion latch, so the granted window's last unit
-	// warns again: d1..d4 spend 11..14, d5 spends 15 — the new exhaustion point.
+	// The grant re-arms the exhaustion latch, so the raised quota's last unit
+	// warns again: d1..d4 ride the surplus, d5 spends the last unit of LIMIT + GRANT.
 	const granted = ['d1', 'd2', 'd3', 'd4', 'd5'].map((id) => spend(s, id));
-	ok(granted.slice(0, 4).every((row) => row.kind === 'allow'), 'the first four granted edits pass silently');
-	ok(granted[4].kind === 'notify' && granted[4].text === EXHAUST_COPY, 'and the fifth re-warns: this exhaustion point warns too');
+	ok(granted.slice(0, 4).every((row) => row.kind === 'allow'), 'the surplus edits pass silently');
+	ok(granted[4].kind === 'notify' && granted[4].text === EXHAUST_COPY, 'and the last one re-warns: this exhaustion point warns too');
 	ok(granted.every((row) => row.text === undefined || row.text === EXHAUST_COPY), 'no granted edit re-opens the window');
 	ok(g.decideEdit(edit('d6'), { mode: MULTI_ID, state: s }).kind === 'deny', 'and then refuses again');
 }
@@ -387,9 +380,9 @@ function spend(state, id, extra = {}) {
 	// inside another carrier is the only thing refused
 	const x = g.initState();
 	turn(x, 1, 'user');
-	for (let n = 1; n <= 10; n += 1) g.decideEdit(edit('x' + n), { mode: MULTI_ID, state: x });
+	for (let n = 1; n <= g.LIMIT; n += 1) g.decideEdit(edit('x' + n), { mode: MULTI_ID, state: x });
 	g.clearNotice(x);
-	ok(g.spentOf(x) === 10, 'the stretch is spent');
+	ok(g.spentOf(x) === g.LIMIT, 'the stretch is spent');
 	ok(g.decideEdit({ name: 'run_code', callId: 'run4' }, { mode: MULTI_ID, state: x }).kind === 'allow', 'a spent stretch still allows the carrier');
 	ok(g.decideEdit({ name: 'list_agents', callId: 'sub:la', rootCallId: 'run4', parent: 'run4' }, { mode: MULTI_ID, state: x }).kind === 'allow', 'so run_code{list_agents} still delegates with nothing left');
 	ok(g.settleRoot(x, { name: 'run_code', callId: 'run4' }).kind === 'free', 'and it costs nothing');
@@ -397,7 +390,7 @@ function spend(state, id, extra = {}) {
 	const denied = g.decideEdit({ name: 'write', callId: 'sub:w5', rootCallId: 'run5', parent: 'run5' }, { mode: MULTI_ID, state: x });
 	ok(denied.kind === 'deny', 'but run_code{write} is refused — the sub-call, not the carrier');
 	ok((denied.reason ?? '').includes('not a broken tool'), 'with the gate copy, so it does not read as a broken tool');
-	ok(g.spentOf(x) === 10, 'a refused dispatch banks nothing');
+	ok(g.spentOf(x) === g.LIMIT, 'a refused dispatch banks nothing');
 	ok(g.settleRoot(x, { name: 'run_code', callId: 'run5' }).kind === 'settled', 'and its settle adds nothing after a refused dispatch');
 }
 
@@ -409,6 +402,8 @@ function spend(state, id, extra = {}) {
 {
 	const s = g.initState();
 	turn(s, 1, 'user');
+	// Six charges fit the base window; what this pins is that each metered tool
+	// still costs one.
 	for (const name of ['read', 'grep', 'glob', 'web_search', 'todo_write', 'edit']) {
 		const verdict = g.decideEdit({ name, callId: name }, { mode: MULTI_ID, state: s });
 		ok(verdict !== null && verdict.kind === 'allow', `${name} is metered and runs`);
@@ -425,6 +420,7 @@ function spend(state, id, extra = {}) {
 {
 	const s = g.initState();
 	turn(s, 1, 'user');
+	// Same reason as above: what this pins is that a PTC run costs one charge.
 	ok(g.decideEdit({ name: 'pwsh', callId: 'probe1' }, { mode: MULTI_ID, state: s }).kind === 'allow' && g.spentOf(s) === 1, 'a read-only pwsh probe still charges one');
 	const kinds = [1, 2, 3].map((n) => g.decideEdit({ name: 'pwsh', callId: 'sub:' + n, rootCallId: 'run9', parent: 'run9' }, { mode: MULTI_ID, state: s }).kind);
 	ok(kinds.every((k) => k === 'allow'), 'the rest of a pwsh PTC run is allowed');
@@ -447,9 +443,9 @@ function spend(state, id, extra = {}) {
 for (const source of ['user', 'agent-message', 'subagent-settled']) {
 	const s = g.initState();
 	turn(s, 1, source);
-	for (const id of ['c1', 'c2', 'c3', 'c4', 'c5']) g.decideEdit(edit(id), { mode: MULTI_ID, state: s });
+	for (let n = 1; n <= g.LIMIT; n += 1) g.decideEdit(edit('c' + n), { mode: MULTI_ID, state: s });
 	g.grantExtra(s, g.GRANT);
-	ok(g.spentOf(s) === 5, `turn 1 spent five of the ten on ${source}`);
+	ok(g.spentOf(s) === g.LIMIT, `turn 1 spent the whole base window on ${source}`);
 	ok(g.quotaOf(s) === g.LIMIT + g.GRANT, `turn 1 holds the surplus on ${source}`);
 	ok(turn(s, 2, source) === true, `${source} resets`);
 	ok(g.spentOf(s) === 0, `${source} clears the spend`);
@@ -465,9 +461,9 @@ for (const source of ['user', 'agent-message', 'subagent-settled']) {
 {
 	const s = g.initState();
 	turn(s, 1, 'user');
-	for (const id of ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9', 'c10']) g.decideEdit(edit(id), { mode: MULTI_ID, state: s });
+	for (let n = 1; n <= g.LIMIT; n += 1) g.decideEdit(edit('c' + n), { mode: MULTI_ID, state: s });
 	g.clearNotice(s);
-	ok(g.spentOf(s) === 10, 'the window is spent before the teammate speaks');
+	ok(g.spentOf(s) === g.LIMIT, 'the window is spent before the teammate speaks');
 	g.observeWake(s, { turn: 2, sourceKind: 'team-message' });
 	ok(g.applyWake(s) === true, 'a teammate\'s message refreshes the window');
 	ok(g.spentOf(s) === 0, 'and clears what the spent window counted');
@@ -477,10 +473,10 @@ for (const source of ['user', 'agent-message', 'subagent-settled']) {
 	for (const source of ['schedule', 'goal']) {
 		const n = g.initState();
 		turn(n, 1, 'user');
-		for (const id of ['c1', 'c2', 'c3']) g.decideEdit(edit(id), { mode: MULTI_ID, state: n });
+		for (let k = 1; k <= g.LIMIT; k += 1) g.decideEdit(edit('c' + k), { mode: MULTI_ID, state: n });
 		g.observeWake(n, { turn: 2, sourceKind: source });
 		ok(g.applyWake(n) === false, `a ${source} wake does not refresh the window`);
-		ok(g.spentOf(n) === 3, `and a ${source} wake keeps the count`);
+		ok(g.spentOf(n) === g.LIMIT, `and a ${source} wake keeps the count`);
 	}
 }
 
@@ -488,13 +484,14 @@ for (const source of ['user', 'agent-message', 'subagent-settled']) {
 for (const source of ['goal', 'schedule']) {
 	const s = g.initState();
 	turn(s, 1, source);
-	for (const id of ['c1', 'c2', 'c3', 'c4', 'c5']) g.decideEdit(edit(id), { mode: MULTI_ID, state: s });
+	for (const id of ['c1', 'c2']) g.decideEdit(edit(id), { mode: MULTI_ID, state: s });
 	g.clearNotice(s);
 	ok(turn(s, 2, source) === false, `${source} does not reset`);
-	ok(g.spentOf(s) === 5, `${source} keeps the spend`);
-	ok(g.decideEdit(edit('c6'), { mode: MULTI_ID, state: s }).kind === 'allow', `${source} keeps counting instead of resetting`);
-	for (const id of ['c7', 'c8', 'c9', 'c10']) g.decideEdit(edit(id), { mode: MULTI_ID, state: s });
-	ok(g.decideEdit(edit('c11'), { mode: MULTI_ID, state: s }).kind === 'deny', `${source} still refuses once the window is spent`);
+	ok(g.spentOf(s) === 2, `${source} keeps the spend`);
+	ok(g.decideEdit(edit('c3'), { mode: MULTI_ID, state: s }).kind === 'allow', `${source} keeps counting instead of resetting`);
+	ok(Array.from({ length: g.LIMIT - 4 }, (_, k) => 'c' + (k + 4)).every((id) => g.decideEdit(edit(id), { mode: MULTI_ID, state: s }).kind === 'allow'), `${source} keeps counting through the middle of the window`);
+	ok(g.decideEdit(edit('c' + g.LIMIT), { mode: MULTI_ID, state: s }).kind === 'notify', `${source} keeps counting instead of resetting: that was the last unit`);
+	ok(g.decideEdit(edit('c' + (g.LIMIT + 1)), { mode: MULTI_ID, state: s }).kind === 'deny', `${source} still refuses once the window is spent`);
 }
 
 // --- the reported subagent case: spend out, delegate, report comes back ---
@@ -506,29 +503,31 @@ for (const source of ['goal', 'schedule']) {
 {
 	const s = g.initState();
 	turn(s, 1, 'user');
-	for (const id of ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9', 'c10']) g.decideEdit(edit(id), { mode: MULTI_ID, state: s });
+	for (let n = 1; n <= g.LIMIT; n += 1) g.decideEdit(edit('c' + n), { mode: MULTI_ID, state: s });
 	g.clearNotice(s);
-	ok(g.decideEdit(edit('c11'), { mode: MULTI_ID, state: s }).kind === 'deny', 'the window is spent before delegating');
+	ok(g.decideEdit(edit('c' + (g.LIMIT + 1)), { mode: MULTI_ID, state: s }).kind === 'deny', 'the window is spent before delegating');
 
 	// The relay report is claimed and opens turn 2.
 	turn(s, 2, 'agent-message');
 	ok(g.spentOf(s) === 0, 'a subagent report clears what the previous window spent');
-	ok(g.decideEdit(edit('c5'), { mode: MULTI_ID, state: s }).kind === 'allow', 'so the main agent can write again, on a fresh silent window');
+	ok(spend(s, 'c5').kind === 'allow', 'so the main agent can write again, on a fresh silent window');
 
 	// The settlement notice then arrives inside the turn that relay opened.
 	// Same turn number, so it must not reset a second time.
-	for (const id of ['c6', 'c7', 'c8', 'c9', 'c10', 'c11', 'c12', 'c13', 'c14', 'c15']) g.decideEdit(edit(id), { mode: MULTI_ID, state: s });
+	ok(spend(s, 'c6').kind === 'allow', 'the fresh window keeps counting');
+	ok(Array.from({ length: g.LIMIT - 3 }, (_, k) => 'c' + (k + 7)).every((id) => spend(s, id).kind === 'allow'), 'the fresh window keeps counting through its middle');
+	ok(spend(s, 'c' + (g.LIMIT + 4)).kind === 'notify', 'until it runs out again');
 	g.clearNotice(s);
 	ok(turn(s, 2, 'subagent-settled') === false, 'the settlement notice is an in-turn steer, not a new window');
-	ok(g.spentOf(s) === 10, 'so it does not hand out a second window');
-	ok(g.decideEdit(edit('c16'), { mode: MULTI_ID, state: s }).kind === 'deny', 'and the second window still runs out');
+	ok(g.spentOf(s) === g.LIMIT, 'so it does not hand out a second window');
+	ok(g.decideEdit(edit('c' + (g.LIMIT + 5)), { mode: MULTI_ID, state: s }).kind === 'deny', 'and the second window still runs out');
 }
 
 // --- a settlement that arrives while the parent is idle does open a turn ---
 {
 	const s = g.initState();
 	turn(s, 1, 'user');
-	for (const id of ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9', 'c10']) g.decideEdit(edit(id), { mode: MULTI_ID, state: s });
+	for (const id of ['c1', 'c2', 'c3']) g.decideEdit(edit(id), { mode: MULTI_ID, state: s });
 	g.grantExtra(s, g.GRANT);
 	ok(turn(s, 2, 'subagent-settled') === true, 'a settlement onto an idle parent resets');
 	ok(g.quotaOf(s) === g.LIMIT, 'and drops the surplus too');
@@ -571,11 +570,11 @@ for (const source of ['goal', 'schedule']) {
 	const req = (used, quota) => ({ mode: MULTI_ID, reason: 'the live ledger needs my context', spent: used, quota });
 	const ok1 = g.decideRequest(req(5, 5));
 	ok(ok1.granted === true, 'multi + a real reason on a spent window grants');
-	ok(ok1.extra === 5, 'and the grant is five');
+	ok(ok1.extra === g.GRANT, 'and the grant is the configured surplus');
 	ok(ok1.note === undefined, 'a grant carries no refusal note');
 	ok(ok1.spent === 5 && ok1.quota === 5, 'and echoes the usage it decided from');
 	ok(g.decideRequest({ ...req(5, 5), amount: 2 }).extra === 2, 'the grant size is a parameter');
-	// The eleventh edit is refused by the edit gate, but the request is not: the
+	// An edit past the window is refused by the edit gate, but the request is not: the
 	// window is spent either way, and that is all this gate looks at.
 	ok(g.decideRequest(req(6, 5)).granted === true, 'a window past its quota may still request');
 	// No cap on the cycle: a grant makes the window unspent again, and spending
@@ -619,7 +618,7 @@ for (const source of ['goal', 'schedule']) {
 // appends to the multitask half. The copy itself is asserted here as before.
 {
 	const on = BUDGET_RECEIPT;
-	ok(on.includes('refreshed — 10 calls'), 'the budget line states the stretch size');
+	ok(on.includes('refreshed — ' + g.LIMIT + ' calls'), 'the budget line states the stretch size');
 	ok(on.includes('A run_code that only dispatches delegation tools'), 'and that a delegation-only carrier is free');
 	ok(on.includes('request_more_edits'), 'the budget line names the way to ask for quota');
 	ok(on.includes('Every other run_code call spends one'), 'and what does count against it');
@@ -630,7 +629,7 @@ for (const source of ['goal', 'schedule']) {
 	const firstState = g.initState();
 	g.decideEdit(edit('b1'), { mode: MULTI_ID, state: firstState });
 	const exhaustState = g.initState();
-	for (const id of ['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9', 'b10']) g.decideEdit(edit(id), { mode: MULTI_ID, state: exhaustState });
+	for (let n = 1; n <= g.LIMIT; n += 1) g.decideEdit(edit('b' + n), { mode: MULTI_ID, state: exhaustState });
 	const modelVisible = [g.wakeNoticeText(firstState), g.blockedText(), g.pendingNoticeText(exhaustState), g.denyReason(), g.denyReason(), g.blankReasonReason(), g.notMultiReason(), g.quotaNotSpentReason(0, 3), g.quotaNotSpentReason(3, 8), g.grantedReason(5), BUDGET_RECEIPT];
 	// The gate's one proven failure mode: copy that reads like "anything goes"
 	// buys quota for a rushed reason. Checked case-insensitively, English only.
@@ -742,7 +741,18 @@ for (const source of ['goal', 'schedule']) {
 		effect: (fn) => fn(),
 		get() {}
 	};
-	const ctx = { logger: host.logger, inject: (_n, fn) => fn(host), effect: (fn) => fn(), on };
+	// The plugin claims the three shipped presets while it loads (it carries
+	// `apply.inject = ['agentPresets']`), so the stub host answers `register` and
+	// records what was claimed; the disposer it returns is discarded, exactly like
+	// the effect stub above discards the routes' cleanup.
+	const presets = [];
+	const ctx = {
+		logger: host.logger,
+		inject: (_n, fn) => fn(host),
+		effect: (fn) => fn(),
+		agentPresets: { register: async (definition) => { presets.push(definition.id); return async () => {}; } },
+		on
+	};
 
 	// registerModeEvent resolves the dsh bin off argv.
 	const argv = process.argv;
@@ -761,8 +771,8 @@ for (const source of ['goal', 'schedule']) {
 		ok((handlers.get(hook) ?? []).length >= 1, `${hook} is wired`);
 	}
 
-	// Drive the mounted hooks end to end: ten edits pass, the eleventh is
-	// refused with the gate copy, and a granted surplus lets editing resume.
+	// Drive the mounted hooks end to end: a base window's edits pass, the next
+	// two are refused with the gate copy, and a granted surplus lets editing resume.
 	const agent = { session, inbox: { nextStep: [], remove() {} }, status: 'idle' };
 	const run = async (hook, ...args) => {
 		const list = handlers.get(hook) ?? [];
@@ -781,29 +791,27 @@ for (const source of ['goal', 'schedule']) {
 
 	const kinds = [];
 	const hung = [];
-	for (const id of ['e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7', 'e8', 'e9', 'e10', 'e11', 'e12']) {
+	for (let n = 1; n <= g.LIMIT + 2; n += 1) {
+		const id = 'e' + n;
 		const decision = await run('tools/pre-execute', { name: 'edit', callId: id, agent });
 		kinds.push(decision.kind);
 		const post = await run('tools/post-execute', { name: 'edit', callId: id, agent }, { isError: false });
 		hung.push((post.additionalContexts ?? []).map((m) => (m.content ?? []).map((c) => c.text).join('')).join(''));
 	}
-	ok(kinds.slice(0, 9).every((k) => k === 'allow'), 'the mounted gate allows ten edits');
-	ok(kinds[10] === 'deny', 'the mounted gate refuses the eleventh');
-	ok(kinds[11] === 'deny', 'and keeps refusing');
+	ok(kinds.slice(0, g.LIMIT).every((k) => k === 'allow'), 'the mounted gate allows the whole base window');
+	ok(kinds.slice(g.LIMIT).every((k) => k === 'deny'), 'and every edit past it is refused');
 	ok(hung[0] === '', 'the mounted first edit carries nothing — the brief rode the wake step');
 	ok(hung[1] === '', 'the mounted second edit carries nothing');
-	ok(hung[2] === '' && hung[3] === '', 'the mounted third and fourth edits carry nothing');
-	ok(hung.slice(4, 9).every((h) => h === ''), 'and the rest of the window up to the last unit carries nothing');
-	ok(hung[9] === EXHAUST_COPY, 'the mounted tenth edit carries the exhaustion copy, verbatim');
-	ok(hung[10] === '' && hung[11] === '', 'and a refused edit carries nothing at all');
+	ok(hung[g.LIMIT - 1] === EXHAUST_COPY, 'the mounted last-unit edit carries the exhaustion copy, verbatim');
+	ok(hung.slice(g.LIMIT).every((h) => h === ''), 'and a refused edit carries nothing at all');
 
-	const refusal = await run('tools/pre-execute', { name: 'edit', callId: 'e13', agent });
+	const refusal = await run('tools/pre-execute', { name: 'edit', callId: 'e' + (g.LIMIT + 3), agent });
 	ok(refusal.reason?.includes('not a broken tool'), 'the mounted refusal carries the gate copy');
 
 	// --- the request tool: three verdicts, all ordinary results ---
 	// Quota math in this block rides the live gate: the mounted agent above
-	// spent 10 of 10 (the two refused edits banked nothing), so the first call
-	// below grants — and that is exactly what this pins.
+	// spent the whole base window (the refused edits banked nothing), so the
+	// first call below grants — and that is exactly what this pins.
 	// None of them may throw or deny: both refusals are an ordinary mistake, and
 	// a broken-looking tool call costs the model a step.
 	const tool = defs.get('request_more_edits');
@@ -811,11 +819,11 @@ for (const source of ['goal', 'schedule']) {
 	const otherAgent = { session: session2, inbox: { nextStep: [], remove() {} }, status: 'running' };
 	const grant = await call(agent, 'the ledger migration needs the context I already hold');
 	ok(grant.granted === true, 'multi + a real reason grants');
-	ok(grant.extra === 5, 'multi + a real reason grants five');
-	ok(tool.output.render({}, grant)[0].text === g.grantedReason(5), 'the granted copy states the size');
+	ok(grant.extra === g.GRANT, 'multi + a real reason grants the configured surplus');
+	ok(tool.output.render({}, grant)[0].text === g.grantedReason(g.GRANT), 'the granted copy states the size');
 	// The grant reached the gate itself, not just the return value: this edit
-	// only passes because the quota moved from 10 to 15.
-	ok((await run('tools/pre-execute', { name: 'edit', callId: 'e14', agent })).kind === 'allow', 'the granted quota really reached the gate');
+	// only passes because the quota moved from LIMIT to LIMIT + GRANT.
+	ok((await run('tools/pre-execute', { name: 'edit', callId: 'e' + (g.LIMIT + 4), agent })).kind === 'allow', 'the granted quota really reached the gate');
 
 	const blank = await call(agent, '   ');
 	ok(blank.granted === false, 'a blank reason is a result, not a throw');
@@ -910,21 +918,23 @@ for (const source of ['goal', 'schedule']) {
 	ok(tooEarly.granted === false, 'a request on an unspent window grants nothing');
 	ok(tooEarly.note === 'quota-not-spent', 'and names the quota, not the reason');
 	ok(tooEarly.extra === 0, 'banking nothing');
-	ok(tool.output.render({}, tooEarly)[0].text === g.quotaNotSpentReason(0, 10), 'and reads back the not-yet copy, with 0 of 10 used');
+	ok(tool.output.render({}, tooEarly)[0].text === g.quotaNotSpentReason(0, g.LIMIT), 'and reads back the not-yet copy, with 0 of the base quota used');
 	const freshKinds = [];
 	const freshHung = [];
-	for (const id of ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9', 'k10', 'k11', 'k12']) {
+	for (let n = 1; n <= g.LIMIT + 2; n += 1) {
+		const id = 'k' + n;
 		freshKinds.push((await run('tools/pre-execute', { name: 'edit', callId: id, agent: freshAgent })).kind);
 		const post = await run('tools/post-execute', { name: 'edit', callId: id, agent: freshAgent }, { isError: false });
 		freshHung.push((post.additionalContexts ?? []).map((m) => (m.content ?? []).map((c) => c.text).join('')).join(''));
 	}
-	ok(freshKinds.join() === 'allow,allow,allow,allow,allow,allow,allow,allow,allow,allow,deny,deny', 'the refused request left the base window exactly as it was');
-	ok(freshHung.slice(0, 9).every((h) => h === '') && freshHung[9] === EXHAUST_COPY, 'and that window still carries only the exhaustion notice');
+	ok(freshKinds.slice(0, g.LIMIT).every((k) => k === 'allow'), 'the refused request left the base window exactly as it was');
+	ok(freshKinds.slice(g.LIMIT).every((k) => k === 'deny'), 'and every edit past it is refused');
+	ok(freshHung.slice(0, g.LIMIT - 1).every((h) => h === '') && freshHung[g.LIMIT - 1] === EXHAUST_COPY, 'and that window still carries only the exhaustion notice');
 	const nowSpent = await call(freshAgent, 'the remainder genuinely cannot go to a subagent');
-	ok(nowSpent.granted === true && nowSpent.extra === 5, 'once that window is spent, the same request grants five');
+	ok(nowSpent.granted === true && nowSpent.extra === g.GRANT, 'once that window is spent, the same request grants the surplus');
 	const spentAgain = await call(freshAgent, 'the remainder genuinely cannot go to a subagent');
 	ok(spentAgain.granted === false && spentAgain.note === 'quota-not-spent', 'but the granted window is unspent again, so asking again is refused');
-	ok(tool.output.render({}, spentAgain)[0].text === g.quotaNotSpentReason(10, 15), 'and the copy reports 10 of 15 used');
+	ok(tool.output.render({}, spentAgain)[0].text === g.quotaNotSpentReason(g.LIMIT, g.LIMIT + g.GRANT), 'and the copy reports the base window of the granted quota');
 
 	const preIdleStep = appended.length;
 	await step(otherAgent);
@@ -985,14 +995,14 @@ for (const source of ['goal', 'schedule']) {
 		ok(plain === '', 'the second policy section renders nothing at all');
 		installed.spawn_teammate = true;
 		ok(sections[0].text({ agent: agent4 }) === '', 'and still nothing with spawn_teammate mounted');
-		ok(!MULTI_SECTION.includes('not a waiting room'), 'the base constant itself stays free of team wording');
+		ok(!MODE_RULES.includes('not a waiting room'), 'the plain constant itself stays free of team wording');
 		installed.spawn_teammate = false;
 		ok(sections[0].text({ agent: agent4 }) === plain, 'and switching the tool back changes nothing');
 	}
 	// The refusal banks no surplus on the non-multi agent's own gate: switching
 	// that session to multi must still hand out exactly the base window. If a
-	// future edit grants unconditionally, or grants the default 5 instead of the
-	// reported 0, this session would open with 10 and the check below goes green.
+	// future edit grants unconditionally, or grants the default GRANT instead of
+	// the reported 0, this session would open with a surplus and go green.
 	const s10 = makeSession('s10');
 	logged.set('s10', null);
 	openTurn.set('s10', 1);
@@ -1002,8 +1012,8 @@ for (const source of ['goal', 'schedule']) {
 	await stepWith(agent10, [{ role: 'user', source: { kind: 'user' } }]);
 	const afterRefusal = [];
 	for (const id of ['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8', 'r9', 'r10', 'r11', 'r12']) afterRefusal.push((await run('tools/pre-execute', { name: 'edit', callId: id, agent: agent10 })).kind);
-	ok(afterRefusal.filter((k) => k === 'allow').length === 10, 'a refused request banked no surplus on the gate');
-	ok(afterRefusal[10] === 'deny', 'and that agent is refused right after its base window');
+	ok(afterRefusal.filter((k) => k === 'allow').length === g.LIMIT, 'a refused request banked no surplus on the gate');
+	ok(afterRefusal[g.LIMIT] === 'deny', 'and that agent is refused right after its base window');
 
 	// --- a session that never switched gets no section and no gate ---
 	const s5 = makeSession('s5');
@@ -1033,16 +1043,16 @@ for (const source of ['goal', 'schedule']) {
 		ok((await run('tools/pre-execute', { name: 'edit', callId: id, agent: agent5 })).kind === 'allow', `an ungated edit (${id}) is not gated`);
 	}
 	// Switching the session to multi proves nothing was banked: a clean gate
-	// allows exactly ten before refusing the eleventh.
+	// allows exactly the base window before refusing the next edit.
 	const s6 = makeSession('s6');
 	logged.set('s6', MULTI_ID);
 	openTurn.set('s6', 1);
 	const agent6 = { session: s6, inbox: { nextStep: [], remove() {} }, steer() {}, status: 'running' };
 	await run('agent/pre-step', { agent: agent6, signal: new AbortController().signal });
 	const fresh = [];
-	for (const id of ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11']) fresh.push((await run('tools/pre-execute', { name: 'edit', callId: id, agent: agent6 })).kind);
-	ok(fresh.slice(0, 10).every((k) => k === 'allow'), 'a newly multi agent starts with a full window');
-	ok(fresh[10] === 'deny', 'and refuses the eleventh, so ungated edits banked nothing');
+	for (let n = 1; n <= g.LIMIT + 1; n += 1) fresh.push((await run('tools/pre-execute', { name: 'edit', callId: 'f' + n, agent: agent6 })).kind);
+	ok(fresh.slice(0, g.LIMIT).every((k) => k === 'allow'), 'a newly multi agent starts with a full window');
+	ok(fresh[g.LIMIT] === 'deny', 'and refuses the edit after the last unit, so ungated edits banked nothing');
 
 	// --- a rejected pre-step is handed back untouched ---
 	// dsh-api-session-controller/lib/index.js:2430 answers a pre-step on an
