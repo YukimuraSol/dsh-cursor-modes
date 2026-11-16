@@ -31,6 +31,9 @@ import { GATE_BRIDGE_PREFIX, GATE_SETTINGS_NS, installGateSection, makeGateRoute
 import { withTeamTails } from './lib/multi-prompt.js';
 import { MODE_EVENT, MODE_KEY, MODE_RECORD, PLAN_DOC_RECORD, setModeEventAppend } from './lib/projection.js';
 import { MODE_RULES, UI_BLOCK_SENTENCE, UI_BLOCK_SENTENCE_WITHOUT_TOOL } from './lib/prompts.js';
+// The expected marker text is built by the SHIPPED function, not re-spelled here:
+// the marker now carries a mode note, and a copy in this file would drift from it.
+import { modeMarkerText } from './lib/state.js';
 
 let passed = 0;
 const failures = [];
@@ -549,10 +552,12 @@ ok(!MODE_RULES.includes('spawn_teammate'), 'the Agent Teams tails stay a deploym
 // snapshot several turns old). It is now one line the pre-step appends after the
 // step's own messages, and ONLY when that line is missing or names another mode:
 // a tool loop must not grow a marker per step.
+// The SAME prefix pattern lib/state.js uses: the marker line is followed by the
+// mode's one-line rule, so an anchored `$` would find nothing here either.
 const markerIn = (decision) => (decision?.messages ?? [])
-	.filter((message) => typeof message.content?.[0]?.text === 'string' && /^<当前模式>[^<]+<\/当前模式>$/.test(message.content[0].text))
+	.filter((message) => typeof message.content?.[0]?.text === 'string' && /^<当前模式>[^<]+<\/当前模式>/.test(message.content[0].text))
 	.map((message) => message.content[0].text);
-const markerText = (mode) => '<当前模式>' + mode + '</当前模式>';
+const markerText = (mode) => modeMarkerText(mode);
 /** Mimic the loop: the messages a step returned are the next step's history. */
 const commitMessages = (target, decision) => {
 	for (const message of decision?.messages ?? []) target.session.history.push(message);
@@ -619,6 +624,21 @@ const bytesInPlan = planSection.text({ agent: switchAgent });
 await switchTo(switchAgent, 'multi');
 eq(planSection.text({ agent: switchAgent }), bytesInPlan, '(f) switching plan -> multitask leaves the section byte-identical');
 eq(captured.sections.length, 2, '(f) the switch registered no section: the section registry is untouched');
+
+// (g) one round, several steps -> exactly ONE marker in the whole round. This is
+//     the case the prefix match above is for: with the old anchored pattern the
+//     dedup could not see its own marker (it now carries a note), so every step
+//     of the loop would have stacked another one.
+const roundSession = makeSession(captured, 's-marker-round');
+const roundAgent = makeAgent(roundSession);
+const roundSteps = [];
+roundSteps.push(await markerStep(roundAgent, [{ role: 'user', source: { kind: 'user' } }]));
+roundSteps.push(await markerStep(roundAgent, [{ role: 'user', source: { kind: 'tool-jobs' } }]));
+roundSteps.push(await markerStep(roundAgent, [{ role: 'user', source: { kind: 'subagent-settled' } }]));
+const roundMarkers = roundSteps.flatMap((step) => markerIn(step));
+eq(roundMarkers.length, 1, '(g) three steps of one round carry exactly one marker, not one per step');
+same(roundMarkers, [markerText('default')], '(g) ... and that one marker is the default-mode line, note included');
+eq(roundSession.history.filter((message) => markerIn({ messages: [message] }).length === 1).length, 1, '(g) the history the next step reads holds that same single marker');
 
 
 // (d) the Agent Teams branch: what the host mounts selects the text -------------
