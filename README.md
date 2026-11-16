@@ -9,7 +9,7 @@ Cursor-like mode switching for [DeepSeek Harness](https://github.com/deepseek-ai
 - **Two gate backends** — follow the current session model, or point at a dedicated decision model (e.g. a local gateway).
 - **Plan mode** — persistent plan cards with an execution checklist.
 - **Per-mode tool policy** — the tool catalog changes with the mode; prompts are kept stable for request-cache reuse.
-- **Multitask mode** — a quota-gated delegation mode: the main thread hands work to background agents and asks for more quota with `request_more_edits` when it runs out.
+- **Multitask mode** — a delegation mode: everything that needs a tool or an edit goes to a background worker, the foreground only answers, dispatches and reports back. There is no call quota to run out of.
 - **Checklist handover** — `subagent` and `subagent_fork` take a `todos` argument, and the child is told its starting checklist exactly once, in its first turn.
 - **`list_running_agent`** — a small companion to `list_agents` that lists only the children still running, so a parent with many finished children keeps a short answer.
 

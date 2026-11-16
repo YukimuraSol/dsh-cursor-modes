@@ -2,7 +2,7 @@
 // self-check-bridge.mjs — the merged plugin's HTTP surface and its one switch hook.
 //
 // Absorbs five retired self-checks (blueprint 6.2):
-//   dsh-cursor-plan/self-check-gate-settings.mjs   -> the Config projection + gate bridge
+//   dsh-cursor-plan/self-check-settings-bridge.mjs -> the Config projection + gate bridge
 //   dsh-cursor-plan/self-check-buildbuttons.mjs    -> the two Build buttons, host + client
 //   dsh-cursor-plan/self-check-gzip-gate.mjs       -> askJev eats a gzip judge answer
 //   dsh-mode-switch/self-check-mode-switch.mjs     -> netChange / notices / submit / apply
@@ -314,15 +314,12 @@ eq(sw.SWITCHABLE, ['plan', 'multi'], 'the switchable modes are the two non-defau
 // 2026-10-23: the two mode commands were deleted outright. Switching goes
 // through the bridge and agent/pre-step only, so a surviving export here would
 // be a second way in — exactly what the removal existed to prevent.
-for (const gone of ['netChange', 'offCommand', 'composeNotice', 'submitCommands', 'applyNetChange', 'wireSwitch', 'switchNoticeId', 'isDecisionPoint', 'hookStats', 'MULTI_COMMAND', 'MODES']) {
+for (const gone of ['netChange', 'offCommand', 'composeNotice', 'submitCommands', 'applyNetChange', 'wireSwitch', 'switchNoticeId', 'isDecisionPoint', 'hookStats', 'MULTI_COMMAND', 'MODES', 'capsOf']) {
 	ok(sw[gone] === undefined, 'the command path is gone: ' + gone);
 }
 ok(sw.BRIDGE_PREFIX === '/api/dsh-cursor-modes/switch', 'the one way in is the switch bridge');
-eq(sw.capsOf({ tools: { get: () => undefined } }).hasRunCode, false, 'capsOf reads an absent run_code as no carrier');
-eq(sw.capsOf({ tools: { get: (name) => (name === 'run_code' ? {} : undefined) } }).hasRunCode, true, 'and a mounted one as the PTC carrier');
-eq(sw.capsOf({ tools: { get: (name) => (name === 'team_task_list' ? {} : undefined) } }).hasTeam, true, 'team_task_list is the team probe');
 eq(sw.switchSummary('multi'), 'dsh-cursor-modes: switched to multi mode', 'the one GUI line names the mode it switched to');
-eq(sw.switchSummary('default'), 'dsh-cursor-modes: switched to default mode', 'and never depends on the budget copy');
+eq(sw.switchSummary('default'), 'dsh-cursor-modes: switched to default mode', 'and carries no budget line: there is no budget any more');
 
 // --- asModeId: the nine inputs the blueprint names, plus the edges ----------
 eq(sw.asModeId('default'), 'default', 'asModeId passes default through');
@@ -394,24 +391,25 @@ ok(sw.isBuildClick(clickOf('The user switched this session to plan mode.')) === 
 
 // --- compositeNoticeText: the six sentences, one shape each ---------------
 eq(sw.compositeNoticeText('default', 'plan'), 'The user switched this session to plan mode.', 'entering plan from default names only the target');
-eq(sw.compositeNoticeText('default', 'multi'), 'The user switched this session to multitask mode. ' + multiPrompt.BUDGET_RECEIPT, 'entering multitask carries the budget line');
+eq(sw.compositeNoticeText('default', 'multi'), 'The user switched this session to multitask mode.', 'entering multitask is the same one sentence: the budget line is gone (2026-11-16)');
 eq(sw.compositeNoticeText('plan', 'default'), 'The user switched this session back to the default mode.', 'returning to default is the back-to-default sentence');
 eq(sw.compositeNoticeText('multi', 'default'), 'The user switched this session back to the default mode.', 'returning to default from multitask is the same sentence');
-eq(sw.compositeNoticeText('plan', 'multi'), 'The user switched this session from plan mode to multitask mode. ' + multiPrompt.BUDGET_RECEIPT, 'a cross-mode switch names the origin, because the leave notice was withdrawn');
+eq(sw.compositeNoticeText('plan', 'multi'), 'The user switched this session from plan mode to multitask mode.', 'a cross-mode switch names the origin, because the leave notice was withdrawn');
 eq(sw.compositeNoticeText('multi', 'plan'), 'The user switched this session from multitask mode to plan mode.', 'the reverse cross-mode switch names its own origin');
 eq(sw.compositeNoticeText('plan', 'plan'), undefined, 'a no-op switch writes nothing');
 eq(sw.compositeNoticeText('default', 'default'), undefined, 'a default-to-default switch writes nothing');
 let compositeThrow = null;
 try { sw.compositeNoticeText('default', 'nope'); } catch (reason) { compositeThrow = reason.message; }
 eq(compositeThrow, 'unknown mode: nope', 'an unknown target throws instead of writing a wrong sentence');
-// The nine-pair loop: no budget line outside multi, no origin clause without a
-// real origin, and every non-identity pair produces exactly one sentence.
+// The nine-pair loop: no budget line anywhere (the quota is gone), no origin
+// clause without a real origin, and every non-identity pair produces exactly one
+// sentence.
 for (const from of sw.MODE_IDS) {
 	for (const to of sw.MODE_IDS) {
 		if (from === to) continue;
 		const text = sw.compositeNoticeText(from, to);
 		ok(typeof text === 'string' && text.startsWith('The user switched this session'), from + ' -> ' + to + ' writes the one switch sentence');
-		ok(text.includes(multiPrompt.BUDGET_RECEIPT) === (to === 'multi'), from + ' -> ' + to + ' appends the budget line iff the target is multi');
+		ok(!/budget|quota|request_more_edits/.test(text), from + ' -> ' + to + ' carries no quota wording of any kind');
 		ok(text.includes(' from ') === (from !== 'default' && to !== 'default'), from + ' -> ' + to + ' names the origin only between two modes');
 	}
 }
@@ -472,10 +470,11 @@ for (const from of sw.MODE_IDS) {
 	eq(stateMod.commitPending(host, state, agent, { kind: 'allow', messages: [userMessage] }, aborted.signal, { requireUserMessage: true }).messages.length, 1, 'an aborted step commits nothing');
 	ok(state.pending.has('s-cp'), 'and keeps the selection too');
 
-	// Entering multitask carries the budget line in the deployment's wording.
+	// Entering multitask is one sentence, exactly like entering plan: the per-stretch
+	// budget line that used to ride it was removed with the quota mechanism.
 	state.pending.set('s-cp', { mode: 'multi', at: 4, origin: 'bridge' });
 	const intoMulti = commit({ kind: 'allow', messages: [userMessage] });
-	eq(intoMulti.messages[1].content[0].text, 'The user switched this session to multitask mode. ' + multiPrompt.BUDGET_RECEIPT, 'entering multitask appends the budget line');
+	eq(intoMulti.messages[1].content[0].text, 'The user switched this session to multitask mode.', 'entering multitask appends nothing beyond the one switch sentence');
 
 	// A Build click is the user's own decision, and its own message is the line.
 	state.pending.set('s-cp', { mode: 'default', at: 5, origin: 'bridge' });
@@ -924,7 +923,7 @@ if (clientSpec !== null) {
 	};
 	eq(noticeDef.match(noticeEvent), { id: 'm-notice-1', role: 'start' }, 'a switch notice starts one row, keyed by its message id');
 	eq(noticeDef.match({ type: 'user/message', surfaceOp: 'append', data: { id: 'm-2', source: { kind: 'user' } } }), null, 'a human message is not claimed');
-	eq(noticeDef.match({ type: 'user/message', surfaceOp: 'append', data: { id: 'm-3', source: { kind: 'dsh-modes', form: 'notice', summary: 'budget' } } }), null, 'the multi-mode budget notice is not a switch line');
+	eq(noticeDef.match({ type: 'user/message', surfaceOp: 'append', data: { id: 'm-3', source: { kind: 'dsh-modes', form: 'notice', summary: 'another plugin said so' } } }), null, 'another producer\'s notice is not a switch line');
 	eq(noticeDef.match({ type: 'user/message', surfaceOp: 'append', data: { id: 'm-4', source: { kind: 'dsh-cursor-modes', form: 'summary' } } }), null, 'only form=notice qualifies');
 	const noticeNode = noticeDef.buildViewNode({
 		key: 'ctx-1',

@@ -15,7 +15,7 @@
 // Run: node self-check-runtime.mjs
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -25,8 +25,6 @@ import { format } from 'node:util';
 import { GATE_DEFAULTS, NOTICE_PLUGIN } from './lib/cursor-plan.js';
 import { BUILD_PATH, BUILD_TARGETS, buildText } from './lib/build.js';
 import { GATE_BRIDGE_PREFIX, GATE_SETTINGS_NS, installGateSection, makeGateRoutes } from './lib/gate-settings.js';
-import { GRANT, LIMIT, quotaOf, spentOf } from './lib/gate.js';
-import { gateOf } from './lib/multi.js';
 // The event name is read from the projection, never re-spelled here: the merged
 // plugin appends ONE cursormodes/state per switch, and an event rename that this
 // file hard-coded would silently leave the fake session folding nothing.
@@ -127,7 +125,7 @@ function makeContext(settingsService) {
 	const captured = {
 		handlers: new Map(),
 		sections: [],
-		/** Dynamic runtime-context contributions (the mode marker lives here). */
+		/** Dynamic runtime-context contributions. The mode marker NO LONGER lives here: since 2026-11-16 it is a message `agent/pre-step` appends, so this bucket must stay empty. */
 		contexts: [],
 		projections: new Map(),
 		tools: [],
@@ -238,6 +236,12 @@ function makeSession(captured, id) {
 		id,
 		projected,
 		appended: [],
+		// The derived history the next request would carry: the marker check reads
+		// this, and a test pushes a step's messages in to mimic the loop's commit.
+		history: [],
+		deriveMessages() {
+			return session.history.slice();
+		},
 		append(type, data) {
 			session.appended.push({ type, data });
 			for (const definition of captured.projections.values()) {
@@ -383,11 +387,11 @@ ok(501 < 502 && 502 < 600, 'the two orders bracket the official plan section wit
 // regression this pins.
 eq(captured.commands.length, 0, 'no mode command registers at all');
 
-eq(captured.tools.length, 3, 'three tools register');
+eq(captured.tools.length, 2, 'two tools register');
 const toolOf = (name) => captured.tools.find((entry) => entry.name === name);
 const planTool = toolOf('create_plan');
-const quotaTool = toolOf('request_more_edits');
-same(captured.tools.map((entry) => entry.name).sort(), ['create_plan', 'list_running_agent', 'request_more_edits'], 'the three model-facing tools, and no fourth');
+same(captured.tools.map((entry) => entry.name).sort(), ['create_plan', 'list_running_agent'], 'the two model-facing tools, and no third');
+eq(toolOf('request_more_edits'), undefined, 'the quota request tool is gone with the quota mechanism (2026-11-16)');
 
 // --- one handler per hook (§5.4a), plus the 0.2.1 todos handover ------------
 //
@@ -400,17 +404,16 @@ same(captured.tools.map((entry) => entry.name).sort(), ['create_plan', 'list_run
 const counts = Object.fromEntries([...captured.handlers].map(([key, list]) => [key, list.length]));
 same(Object.keys(counts).sort(), [
 	'agent/created',
-	'agent/inbox/claimed',
 	'agent/pre-step',
 	'tools/change',
 	'tools/post-execute',
 	'tools/pre-execute'
-], 'exactly six hook keys, no stragglers: ' + show(Object.keys(counts).sort()));
+], 'exactly five hook keys, no stragglers: ' + show(Object.keys(counts).sort()));
 eq(counts['agent/pre-step'], 2, 'two agent/pre-step: the modes (outermost) + the todos re-patch');
 eq(counts['tools/post-execute'], 2, 'two tools/post-execute: the modes (outermost) + the todos claim');
 eq(counts['tools/change'], 1, 'one tools/change - the hook that puts todos on the step-1 schema');
 eq(counts['agent/created'], 1, 'one agent/created - the latch armed at creation');
-eq(counts['agent/inbox/claimed'], 1, 'one agent/inbox/claimed (the multi wake observer)');
+ok(counts['agent/inbox/claimed'] === undefined, 'no agent/inbox/claimed: the quota wake observer is gone');
 ok(counts['agent/inbox/inserted'] === undefined, 'no agent/inbox/inserted: the commit lives in agent/pre-step now');
 const preExecute = captured.handlers.get('tools/pre-execute');
 eq(preExecute?.length, 1, '§5.4(a) exactly ONE tools/pre-execute — the merged gate runs both branches internally');
@@ -541,16 +544,30 @@ installed.spawn_teammate = false;
 ok(MODE_RULES.includes('NEVER await or sleep'), 'the multitask rules moved into the constant verbatim');
 ok(!MODE_RULES.includes('spawn_teammate'), 'the Agent Teams tails stay a deployment variant, never part of the constant');
 
-// --- the mode marker: a runtime context, and the only moving part ------------
-// (a) the section is byte-identical across modes, (b) the marker is not, and
-// (c) the two live in different registries, so a switch cannot touch the section.
-const contextOf = (name) => captured.contexts.find((entry) => entry.name === name);
-const modeContext = contextOf('cursor-modes:mode');
-ok(modeContext !== undefined, 'the mode marker registers as a runtime context');
-eq(modeContext?.order, 220, 'the marker sits last in the runtime-context snapshot (after web surface 210)');
-eq(modeContext?.interpolate, false, 'the marker is literal text, so a prompt variable can never rewrite it');
-eq(captured.sections.some((entry) => entry.name === 'cursor-modes:mode'), false, 'the marker is NOT a section: a section would live in the cached prefix');
-eq(captured.contexts.length, 1, 'exactly one context registers — the mode marker — so it cannot drift into a second copy');
+// --- the mode marker: one line, appended by agent/pre-step -------------------
+// 2026-11-16: the marker left the runtime-context provider (it could be a
+// snapshot several turns old). It is now one line the pre-step appends after the
+// step's own messages, and ONLY when that line is missing or names another mode:
+// a tool loop must not grow a marker per step.
+const markerIn = (decision) => (decision?.messages ?? [])
+	.filter((message) => typeof message.content?.[0]?.text === 'string' && /^<当前模式>[^<]+<\/当前模式>$/.test(message.content[0].text))
+	.map((message) => message.content[0].text);
+const markerText = (mode) => '<当前模式>' + mode + '</当前模式>';
+/** Mimic the loop: the messages a step returned are the next step's history. */
+const commitMessages = (target, decision) => {
+	for (const message of decision?.messages ?? []) target.session.history.push(message);
+	return decision;
+};
+/** Run one enter step with these claimed messages, then commit them. */
+const markerStep = async (target, messages) => commitMessages(
+	target,
+	await preStep({ agent: target, signal: { aborted: false } }, async () => ({ kind: 'enter', messages }))
+);
+
+// The context provider is GONE: a provider would put the line in the snapshot,
+// where a stale one could outlive the user message that changed the mode.
+eq(captured.contexts.length, 0, 'no runtime-context provider registers any more: the marker is a message, not a snapshot section');
+eq(captured.sections.some((entry) => entry.name === 'cursor-modes:mode'), false, 'and it is not a section either: a section would live in the cached prefix');
 
 const markDefaultSession = makeSession(captured, 's-marker-default');
 const markDefaultAgent = makeAgent(markDefaultSession);
@@ -559,30 +576,49 @@ const markPlanAgent = makeAgent(markPlanSession);
 const markMultiSession = makeSession(captured, 's-marker-multi');
 const markMultiAgent = makeAgent(markMultiSession);
 markPlanSession.append(MODE_EVENT, { mode: 'plan' });
-await switchTo(markMultiAgent, 'multi');
+markMultiSession.append(MODE_EVENT, { mode: 'multi' });
 
-// (a) same bytes in default and plan
+// (a) the section is the same bytes in every mode: the marker is the only moving part
 eq(planSection.text({ agent: markDefaultAgent }), planSection.text({ agent: markPlanAgent }), '(a) the section renders byte-identical text in default and plan');
 eq(planSection.text({ agent: markDefaultAgent }), MODE_RULES, '(a) ... and those bytes are the constant itself, not a copy');
 eq(planSection.text({ agent: markMultiAgent }), planSection.text({ agent: markPlanAgent }), '(a) plan and multitask render the same bytes too');
 
-// (b) the marker follows the mode and names it
-eq(modeContext.text({ agent: markDefaultAgent }), '<当前模式>default</当前模式>', '(b) the marker names the default mode');
-eq(modeContext.text({ agent: markPlanAgent }), '<当前模式>plan</当前模式>', '(b) and the plan mode');
-eq(modeContext.text({ agent: markMultiAgent }), '<当前模式>multitask</当前模式>', '(b) and spells multi the way the rules do: multitask, not the persisted id');
-eq(modeContext.text({}), '', '(b) a context with no agent renders nothing');
-ok(modeContext.text({ agent: markPlanAgent }) !== modeContext.text({ agent: markDefaultAgent }), '(b) the marker is the one thing that changes with the mode');
+// (b) a step that delivers the user's message carries the marker for the mode in
+//     force, spelled the way the rules spell it
+const defaultMarker = await markerStep(markDefaultAgent, [{ role: 'user', source: { kind: 'user' } }]);
+same(markerIn(defaultMarker), [markerText('default')], '(b) default mode is marked default');
+const planMarker = await markerStep(markPlanAgent, [{ role: 'user', source: { kind: 'user' } }]);
+same(markerIn(planMarker), [markerText('plan')], '(b) plan mode is marked plan');
+const multiMarker = await markerStep(markMultiAgent, [{ role: 'user', source: { kind: 'user' } }]);
+same(markerIn(multiMarker), [markerText('multitask')], '(b) multi is spelled multitask, the word the rules use, not the persisted id');
+eq(markerIn(multiMarker)[0].includes('multi<'), false, '(b) ... and never the bare persisted id');
 
-// (c) the two registries are separate: a switch must not touch the section
+// (c) a step that delivered no user message appends nothing: the marker already
+//     sits after the latest one, so a tool loop cannot repeat it
+const quietStep = await markerStep(markPlanAgent, [{ role: 'user', source: { kind: 'subagent-settled' } }]);
+same(markerIn(quietStep), [], '(c) no user delivery -> no second marker');
+const quietAgain = await markerStep(markPlanAgent, [{ role: 'user', source: { kind: 'tool-jobs' } }]);
+same(markerIn(quietAgain), [], '(c) ... and still none on the step after it');
+
+// (d) a marker that disagrees with the mode in force is followed by the right one
+markPlanSession.append(MODE_EVENT, { mode: 'multi' });
+const movedStep = await markerStep(markPlanAgent, [{ role: 'user', source: { kind: 'schedule' } }]);
+same(markerIn(movedStep), [markerText('multitask')], '(d) a stale marker is not trusted: the right one follows it');
+
+// (e) compaction folds the marker away -> the next step puts it back, WITHOUT a
+//     new user message. That is what makes compression a trigger, not a risk.
+markMultiSession.history = [{ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'hi' }] }];
+const foldedStep = await markerStep(markMultiAgent, [{ role: 'user', source: { kind: 'subagent-settled' } }]);
+same(markerIn(foldedStep), [markerText('multitask')], '(e) a compaction that dropped the marker brings it back on the next step');
+
+// (f) the marker rides the step, not the section: a switch cannot touch the bytes
 const switchSession = makeSession(captured, 's-marker-switch');
 const switchAgent = makeAgent(switchSession);
 switchSession.append(MODE_EVENT, { mode: 'plan' });
 const bytesInPlan = planSection.text({ agent: switchAgent });
-const markerInPlan = modeContext.text({ agent: switchAgent });
 await switchTo(switchAgent, 'multi');
-eq(planSection.text({ agent: switchAgent }), bytesInPlan, '(c) switching plan -> multitask leaves the section byte-identical');
-ok(modeContext.text({ agent: switchAgent }) !== markerInPlan, '(c) ... and moves only the marker');
-eq(captured.sections.length, 2, '(c) the switch registered no section: the section registry is untouched');
+eq(planSection.text({ agent: switchAgent }), bytesInPlan, '(f) switching plan -> multitask leaves the section byte-identical');
+eq(captured.sections.length, 2, '(f) the switch registered no section: the section registry is untouched');
 
 
 // (d) the Agent Teams branch: what the host mounts selects the text -------------
@@ -620,12 +656,11 @@ installed.create_ui_block = true;
 installed.spawn_teammate = false;
 eq(planSection.text({ agent: markDefaultAgent }), MODE_RULES, '(d) and the plain constant comes back, byte for byte, when the mount is gone');
 
-// --- §5.4(b): plan mode answers BEFORE a full multitask quota ---------------
-// The one call both gates can see: a non-plan write made in plan mode while the
-// agent's quota is ALREADY exhausted. If the two branches swapped, the multi
-// gate would answer first and the refusal would be the quota sentence — so the
-// assertions pin WHICH sentence came back, not merely that something denied.
-// plan-mode never blocks reads, so the writes below are the only real subject.
+// --- §5.4(b): the plan write gate, driven through the real handler ----------
+// A refusal here must be the plan-mode sentence, name the target it refused, and
+// name the way out. plan mode never blocks reads, so the writes below are the
+// only real subject: the exemption list is asserted by flipping one path family
+// at a time, and anything outside it stays refused.
 const orderSession = makeSession(captured, 's-order');
 const orderAgent = makeAgent(orderSession);
 orderSession.append(MODE_EVENT, { mode: 'plan' });
@@ -697,42 +732,31 @@ const sourceDenied = await preExecuteHandler(
 );
 eq(sourceDenied?.kind, 'deny', 'workspace source stays read-only: the exemption is a directory, not a mood');
 
-const orderGate = gateOf(orderAgent);
-eq(spentOf(orderGate), 0, 'the plan allow-side above never charged the multitask gate');
-// Fill the window the way the gate itself counts: LIMIT distinct serial roots.
-while (orderGate.seen.size < LIMIT) orderGate.seen.add('filler-' + orderGate.seen.size);
-eq(spentOf(orderGate), LIMIT, 'the quota is filled to LIMIT (' + String(LIMIT) + ') before the plan call');
-const spentBefore = spentOf(orderGate);
-// notes.py is deliberately something plan mode refuses AND the quota gate would
-// also refuse, so only the ORDER decides which sentence comes back.
+// --- §5.4(b): the plan write gate still refuses, with the plan sentence ------
+// The multitask quota gate that used to sit behind this branch was removed on
+// 2026-11-16; what must survive is the plan write gate itself: a non-exempt write
+// is refused, the refusal names the target, and the way out is spelled out.
 const planDenied = await preExecuteHandler(
 	{ name: 'write', arguments: { file_path: 'D:\\work\\notes.py', content: 'print(1)' }, agent: orderAgent },
 	next
 );
-eq(planDenied?.kind, 'deny', '§5.4(b) mode=plan + a spent quota still denies a non-plan write');
-ok(
-	typeof planDenied?.reason === 'string' && !/tool-call gate/.test(planDenied.reason),
-	'§5.4(b) the refusal is NOT the multitask quota sentence — this is the swap witness: ' + show(planDenied?.reason)
-);
+eq(planDenied?.kind, 'deny', '§5.4(b) a non-exempt write in plan mode is denied');
 matches(planDenied?.reason, /plan/i, '§5.4(b) the refusal is the plan-mode sentence');
 matches(planDenied?.reason, /notes\.py/, '§5.4(b) the refusal names the target it refused');
 matches(planDenied?.reason, /Only the user can change the mode/, '§5.4(b) the refusal names the way out without naming a deleted command');
-eq(spentOf(orderGate), spentBefore, '§5.4(b) a plan-mode refusal charges nothing: the quota gate never ran');
-eq(orderGate.pendingNotice, undefined, '§5.4(b) no quota notice was latched, so post-execute cannot attach one');
 const tsDenied = await preExecuteHandler({ name: 'edit', arguments: { file_path: 'a.ts', old_string: 'a', new_string: 'b' }, agent: orderAgent }, next);
 eq(tsDenied?.kind, 'deny', '§5.4(b) editing a .ts file in plan mode is denied');
 matches(tsDenied?.reason, /plan/i, '§5.4(b) ... with the plan sentence again');
-eq(spentOf(orderGate), spentBefore, '§5.4(b) still nothing charged');
-
-// --- §5.4(c): the reverse — in multi mode the quota sentence is the refusal --
+// ... and the same write in multi mode is not the plan gate's business: with the
+// quota gone, nothing denies it.
 const multiOrderSession = makeSession(captured, 's-order-multi');
 const multiOrderAgent = makeAgent(multiOrderSession);
 multiOrderSession.append(MODE_EVENT, { mode: 'multi' });
-const multiOrderGate = gateOf(multiOrderAgent);
-while (multiOrderGate.seen.size < LIMIT) multiOrderGate.seen.add('m-filler-' + multiOrderGate.seen.size);
-const multiDenied = await preExecuteHandler({ name: 'edit', arguments: { file_path: 'a.ts', old_string: 'a', new_string: 'b' }, agent: multiOrderAgent }, next);
-eq(multiDenied?.kind, 'deny', '§5.4(c) a spent quota in multi mode denies the edit');
-matches(multiDenied?.reason, /tool-call gate/, '§5.4(c) ... with the multitask quota sentence, so the two gates stay distinguishable');
+eq(
+	await preExecuteHandler({ name: 'edit', arguments: { file_path: 'a.ts', old_string: 'a', new_string: 'b' }, agent: multiOrderAgent }, next),
+	allowed,
+	'in multi mode the same edit is not denied: no quota counter is left to refuse it'
+);
 
 // --- the delegation gate's judgement trail ----------------------------------
 // This is the only place the real pre-execute branch runs with the judge
@@ -833,6 +857,15 @@ same(planned?.todos, [
 // The frontmatter keeps the whole list too, so a reload still has it.
 const plannedText = existsSync(planned.path) ? readFileSync(planned.path, 'utf8') : '';
 ok(plannedText.includes('content: back up the files'), 'the plan file frontmatter carries the checklist');
+// The plan-doc section below asserts WHAT one call publishes, so it runs with ONE
+// plan file in `plans/`. `notePlanActivity` claims every `*.plan.md` whose BIRTH
+// falls inside the window of the call in flight (lib/plan.js:222-230), and the two
+// files above are written ~2 ms apart — so when the first section's pre-execute
+// lands between them, this second plan is claimed too, loses the "newest mtime"
+// contest twice, and is then published on the unrelated `notes.md` call. That is
+// the "expected 3, got 4" flake: a real rule (born-in-window) meeting a spacing
+// the test never promised. Its turn is over; drop the file so the section has one.
+if (existsSync(planned.path)) rmSync(planned.path, { force: true });
 
 // A plan with no # heading is refused, so a malformed plan never reaches disk.
 await assert.rejects(async () => planTool.execute({ plan: 'no heading here' }, {}), /starting with a # heading/);
@@ -866,9 +899,23 @@ eq(docSession.appended.length, beforeDoc + 1, 'the call that wrote the plan appe
 same(docSession.appended.at(-1), { type: PLAN_DOC_RECORD, data: { turn: 3, path: result.path, plan: revised } }, 'the planDoc is the plugin:cursormodes/plandoc record and carries turn, path and body');
 // A second write in the SAME turn appends a second record: the client keeps one
 // card per turn and shows the last record before the closing reply.
-await preDoc('write', { file_path: result.path });
+//
+// The publish decision is "this file's mtime differs from the mtime I last
+// published" (lib/plan.js:240). Two `writeFileSync` calls can land on the SAME
+// mtime value, and then the second record is legitimately not published — the
+// "expected 3, got 2" flake, a property of the clock, not of the plugin. So the
+// write is repeated until the mtime actually moves, which is what a real pair of
+// tool calls guarantees anyway (they are never in the same instant).
+const firstPublished = statSync(result.path).mtimeMs;
 const revised2 = revised + 'Second pass.\n';
+await preDoc('write', { file_path: result.path });
 writeFileSync(result.path, revised2, 'utf8');
+let mtime2 = statSync(result.path).mtimeMs;
+for (let attempt = 0; mtime2 === firstPublished && attempt < 50; attempt += 1) {
+	writeFileSync(result.path, revised2, 'utf8');
+	mtime2 = statSync(result.path).mtimeMs;
+}
+ok(mtime2 !== firstPublished, 'the second write lands on a new mtime, so the publish rule can see it: ' + firstPublished + ' -> ' + mtime2);
 const writeDecision = await postDoc('write', { file_path: result.path, content: revised2 }, undefined);
 eq(writeDecision, postAccept, 'post-execute hands the decision on untouched');
 eq(docSession.appended.length, beforeDoc + 2, 'a second write in the same turn appends a second planDoc');
@@ -1065,7 +1112,7 @@ agent.inbox.nextStep.push({ id: 'other-1', source: { kind: 'plugin', plugin: 'pl
 const swept = await switchTo(agent, 'multi');
 eq(agent.injected.length, 0, 'a switch injects nothing: the notice rides the step');
 // TEETH: the sweep is keyed by message id, so the fake inbox records the ids it
-// was asked to withdraw. Passing the CATEGORY ('plan'/'switch'/'quota') instead
+// was asked to withdraw. Passing the CATEGORY ('plan'/'switch') instead
 // of message.id shows up here as ['plan'] — a removal that never happened.
 same(agent.inbox.removed, ['stale-1'], 'only this plugin stale notice is withdrawn');
 same(agent.inbox.nextStep, [{ id: 'other-1', source: { kind: 'plugin', plugin: 'plan-mode', form: 'notice' } }], 'a foreign notice is left alone');
@@ -1081,38 +1128,13 @@ await preStep({ agent, signal: { aborted: false } }, async () => ({ kind: 'enter
 eq(session.projected.get(MODE_KEY)?.mode, 'multi', 'a step that claimed no user message leaves the selection pending');
 const landed = await preStep({ agent, signal: { aborted: false } }, async () => ({ kind: 'enter', messages: [{ role: 'user', source: { kind: 'user' } }] }));
 eq(session.projected.get(MODE_KEY)?.mode, 'plan', 'the step that claims the user message commits it');
-eq((landed.messages ?? []).at(-1)?.source?.summary, 'dsh-cursor-modes: switched to plan mode', 'and carries the one-line summary the GUI can show');
-session.projected.set('turnBoundary', { openTurnStartSeq: null, lastTurn: 1 });
-
-// --- request_more_edits drives the real quota gate --------------------------
-// defineTool() normalizes the shorthand into a JSON schema, so the assertion is
-// on the normalized shape — the same surface the model is shown.
-same(Object.keys(quotaTool?.parameters?.properties ?? {}), ['reason'], 'the tool takes exactly one argument');
-eq(quotaTool?.parameters?.properties?.reason?.type, 'string', 'and it is a string');
-same(quotaTool?.parameters?.required, ['reason'], 'and it is required');
-same(
-	Object.keys(quotaTool?.output?.schema?.properties ?? {}).sort(),
-	['extra', 'granted', 'note', 'quota', 'spent'],
-	'the answer carries the whole four-way verdict plus the usage'
+eq(
+	(landed.messages ?? []).find((message) => message.source?.form === 'notice')?.source?.summary,
+	'dsh-cursor-modes: switched to plan mode',
+	'and carries the one-line summary the GUI can show'
 );
-const quotaSession = makeSession(captured, 's-quota');
-const quotaAgent = makeAgent(quotaSession);
-const notMulti = await quotaTool.execute({ reason: 'because' }, { agent: quotaAgent });
-eq(notMulti?.granted, false, 'outside multi mode the tool grants nothing');
-eq(notMulti?.note, 'not-multi', 'and says why');
-quotaSession.append(MODE_EVENT, { mode: 'multi' });
-const notSpent = await quotaTool.execute({ reason: 'because' }, { agent: quotaAgent });
-eq(notSpent?.note, 'quota-not-spent', 'a window with quota left refuses the request');
-const quotaGate = gateOf(quotaAgent);
-while (quotaGate.seen.size < quotaOf(quotaGate)) quotaGate.seen.add('q-' + quotaGate.seen.size);
-eq(spentOf(quotaGate), quotaOf(quotaGate), 'the window is spent before a grant can happen');
-const blank = await quotaTool.execute({ reason: '   ' }, { agent: quotaAgent });
-eq(blank?.note, 'blank-reason', 'a blank reason buys nothing');
-const granted = await quotaTool.execute({ reason: 'I will finish the migration myself' }, { agent: quotaAgent });
-eq(granted?.granted, true, 'a spent window with a real reason grants');
-eq(granted?.extra, GRANT, 'the grant is the module GRANT, not a literal here');
-eq(quotaOf(quotaGate), LIMIT + GRANT, 'and the window really grew');
-matches(quotaTool.output.render({}, granted)?.[0]?.text, /Granted/, 'the render says it was granted');
+same(markerIn(landed), [markerText('plan')], 'and the step that landed the switch also carries the new mode marker');
+session.projected.set('turnBoundary', { openTurnStartSeq: null, lastTurn: 1 });
 
 // --- settings namespace + bridge against stub services ----------------------
 eq(GATE_SETTINGS_NS, 'cursor-modes', 'the settings namespace is the MERGED plugin id, not the retired cursor-plan');

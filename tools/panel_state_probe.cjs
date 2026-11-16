@@ -171,7 +171,7 @@ async function main() {
     console.log("card geometry: " + JSON.stringify({ h: s.card.height, w: s.card.width, marginLeft: s.card.marginLeft, left: s.card.x, rowLeft: s.card.rowLeft, rowFill: s.rowFill, panel: s.panel, hostWidth: s.card.hostWidth, right: s.card.right, rowRight: s.card.rowRight, rowHeight: s.card.rowHeight, radius: s.card.radius, roleRadius: s.card.roleRadius, restBg: s.card.bg, restOpacity: s.card.opacity, hoverBg: hovered ? hovered.bg : null, hoverOpacity: hovered ? hovered.opacity : null }));
   }
   // Click storm (report round 10): the compaction's MutationObserver must not self-excite.
-  // Real CDP clicks on the card, each round trip budgeted, plus a sync-count ceiling.
+  // Real CDP clicks on the card, each round trip time-capped, plus a sync-count ceiling.
   if (s.card) {
     const statsJs = "(function () { return window.__dcmPanelStats ? JSON.stringify(window.__dcmPanelStats()) : 'none'; })()";
     const centerJs = "(function () { var c = document.querySelector('[data-dcm-expand-more]'); if (!c) return null; var r = c.getBoundingClientRect(); if (!r.width) return null; return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }); })()";

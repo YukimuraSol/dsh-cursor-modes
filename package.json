@@ -1,8 +1,11 @@
 {
   "name": "dsh-cursor-modes",
-  "version": "0.2.10",
-  "private": true,
-  "description": "Cursor-style modes for the Harness web UI: plan mode, multitask quota, the create_plan / request_more_edits tools and the delegation gate. Since 0.2.1 it also owns the subagent todos handover: the `todos` parameter on `subagent` and `subagent_fork`, and the child todo seed that rides it.",
+  "version": "0.3.0",
+  "private": false,
+  "description": "Cursor-style modes for the Harness web UI: plan mode, multitask delegation, the create_plan tool and the delegation gate. Since 0.2.1 it also owns the subagent todos handover: the `todos` parameter on `subagent` and `subagent_fork`, and the child todo seed that rides it.",
+  "repository": "https://github.com/YukimuraSol/dsh-cursor-modes.git",
+  "license": "MIT",
+  "author": "YukimuraSol <Sol.Yukimura@gmail.com>",
   "//": "Frozen vendored copy: never run npm install / npm ci here. A lockfile would negotiate the aligned 0.2.0-rc.2 packages back to 0.1.5-rc.2 and silently break the host. To change a dependency, copy the whole node_modules tree from the host instead.",
   "type": "module",
   "main": "lib/index.js",
@@ -21,7 +24,6 @@
     "lib/switch.js",
     "lib/routes.js",
     "lib/settings.js",
-    "lib/gate.js",
     "lib/prompts.js",
     "lib/multi-prompt.js",
     "lib/build.js",
@@ -31,7 +33,10 @@
     "lib/create-plan-fold.js",
     "lib/cursor-plan.js",
     "lib/subagent-todos.js",
-    "lib/list-running-agent.js"
+    "lib/list-running-agent.js",
+    "lib/preset-derive.js",
+    "locale/en.json",
+    "locale/zh.json"
   ],
   "dsh": {
     "bundle": {

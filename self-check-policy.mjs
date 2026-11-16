@@ -26,17 +26,18 @@
 // Prints "self-check-policy: N passed, M failed" and exits 1 on any failure.
 
 import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import * as prompts from './lib/prompts.js';
 import * as multiPrompt from './lib/multi-prompt.js';
 import * as build from './lib/build.js';
-// The budget receipt spells its window size out instead of importing this (the
-// two pure modules would go circular), so the check is the only place that can
-// prove the two numbers still agree.
-import { LIMIT } from './lib/gate.js';
 // The build route stages a default build's checklist in the one state bag; these
 // checks drive the route directly, so they hand it a throwaway bag.
 import { createState } from './lib/state.js';
+// The plan-mode write gate lives in plan.js; section 9 drives its real function.
+import * as plan from './lib/plan.js';
 
 let passed = 0;
 const failures = [];
@@ -84,12 +85,18 @@ eq(typeof prompts.renderChecklist, 'function', 'and renderChecklist is the other
 // would keep the two in sync.
 ok(!Object.hasOwn(prompts, 'default'), 'prompts.js carries no default export');
 
-const MULTI_EXPORTS = ['BUDGET_RECEIPT', 'MULTI_ID', 'budgetBrief', 'quotaToolDescription', 'withTeamTails'];
+const MULTI_EXPORTS = ['MULTI_ID', 'withTeamTails'];
 eq(
 	Object.keys(multiPrompt).sort().join(','),
 	MULTI_EXPORTS.slice().sort().join(','),
-	'multi-prompt.js exports exactly these five names'
+	'multi-prompt.js exports exactly these two names'
 );
+// 2026-11-16: the quota copies left with the quota mechanism itself. A brief or a
+// tool description reappearing here would mean a second home for "how many calls
+// are left" — the thing this change removed.
+for (const gone of ['BUDGET_RECEIPT', 'budgetBrief', 'quotaToolDescription']) {
+	ok(!Object.hasOwn(multiPrompt, gone), 'multi-prompt.js no longer exports ' + gone);
+}
 ok(!Object.hasOwn(multiPrompt, 'TEAM_TAILS'), 'TEAM_TAILS stays private: the splices are an implementation detail');
 // The team variant is DERIVED, and nothing exports a pre-built copy of it: withTeamTails
 // is the only seam, so there is no second constant for an edit to miss.
@@ -183,7 +190,12 @@ ok(ENTRY_FREE.includes('you MUST NOT make any edits'), 'the swap leaves the blan
 ok(ENTRY_FREE.includes('Everything else stays read-only.'), 'the swapped section still re-asserts read-only for everything else');
 
 // --- entry set --------------------------------------------------------------
-eq((E.match(/^\d+\. /gm) ?? []).length, 11, 'the entry set has its eleven numbered items');
+// Counted INSIDE the plan section: the multitask section carries a numbered list
+// of its own ("the foreground does three things"), and a whole-constant count
+// would read that list as extra plan entries.
+const PLAN_SECTION = E.slice(E.indexOf('## 当模式为 plan 时'), E.indexOf('## 当模式为 multitask 时'));
+eq((PLAN_SECTION.match(/^\d+\. /gm) ?? []).length, 11, 'the entry set has its eleven numbered items');
+eq((E.match(/^\d+\. /gm) ?? []).length, 14, 'and the multitask section contributes exactly its three (11 + 3)');
 for (let n = 1; n <= 11; n++) ok(E.includes('\n' + n + '. '), 'entry item ' + n + ' is present');
 ok(E.includes('calling the create_plan tool'), 'entry names create_plan as how a plan is presented');
 ok(E.includes('ask_user_question tool'), 'entry routes every question through ask_user_question');
@@ -466,11 +478,17 @@ eq(count(TEAM, OPENING), 1, 'the team variant announces the mode once, not twice
 ok(BASE.length > 0, 'the multitask section is found in the constant, not empty');
 ok(TEAM.length > BASE.length, 'the team variant ADDS text; a shorter one means a tail overwrote something');
 ok(TEAM.length - BASE.length > 400, 'the three tails are all there, not just one');
-ok(BASE.includes(tick('subagent') + ' tool'), 'the section names this harness\'s subagent tool');
 ok(BASE.includes('NEVER await or sleep'), 'the section forbids waiting on a running worker');
-ok(BASE.includes('more than just one tool call'), 'the delegation threshold is still stated');
-ok(BASE.includes('NO or ONE tool calls'), 'trivial requests stay in the foreground');
-ok(BASE.includes('unless they ask'), 'the instructions may be quoted when the user asks');
+// 2026-11-16: the section is "delegate everything" now. These six sentences are
+// its spine, and each one is what the rewrite must keep: no self-work, two
+// exceptions and no third, end the turn, acceptance written into the dispatch,
+// and no self-review.
+ok(BASE.includes('这个模式下你不自己动手'), 'the section forbids doing the work in the foreground');
+ok(BASE.includes('例外只有两条，没有第三条'), 'the two exceptions are closed: no third way to work in the foreground');
+ok(BASE.includes('派完就停'), 'the section ends the turn after dispatching');
+ok(BASE.includes('验收条件写在派单里'), 'acceptance criteria are written into the dispatch, not after it');
+ok(BASE.includes('你不复核'), 'the coordinator does not re-check the worker by hand');
+ok(!BASE.includes('零次或一次调用'), 'the old "zero or one call" escape hatch is gone');
 ok(!BASE.includes('EXITED your previous mode'), 'the section must not announce an exit it cannot verify');
 ok(!BASE.includes('even if asked'), 'asking may quote the instructions');
 ok(!BASE.includes('requires ANY tool calls'), 'the composer2 delegate line is a different variant');
@@ -501,7 +519,7 @@ ok(at(TEAM, ANCHOR_SET_TO) < at(TEAM, ANCHOR_NOTIFY), 'the team variant keeps th
 ok(at(TEAM, ANCHOR_NOTIFY) < at(TEAM, ANCHOR_CEILING), 'the team variant keeps the notify/ceiling order');
 
 // --- the base constant must stay clean of team wording ----------------------
-for (const keyword of ['team_task_create', 'spawn_teammate', 'not a waiting room', 'not over-decomposition', 'wait_agent', 'teammate']) {
+for (const keyword of ['team_task_create', 'spawn_teammate', 'not a waiting room', 'not over-decomposition', 'teammate']) {
 	ok(!BASE.includes(keyword), 'the base section stays free of team wording: ' + keyword);
 }
 
@@ -521,7 +539,7 @@ const TAIL_2 = TEAM.slice(at(TEAM, ANCHOR_NOTIFY) + ANCHOR_NOTIFY.length, TEAM.i
 // after the third tail, so the tail is measured up to that point.
 const BASE_REST = BASE.slice(at(BASE, ANCHOR_CEILING) + ANCHOR_CEILING.length);
 const TAIL_3 = TEAM.slice(at(TEAM, ANCHOR_CEILING) + ANCHOR_CEILING.length, TEAM.indexOf(BASE_REST));
-ok(BASE_REST.length > 1000, 'the base really has text after the last anchor, so tail 3 is not the whole ending');
+ok(BASE_REST.length > 300, 'the base really has text after the last anchor, so tail 3 is not the whole ending');
 ok(TEAM.includes(SEG_1), 'the base text between the first two anchors survives unedited in the variant');
 ok(TEAM.includes(SEG_2), 'the base text between the last two anchors survives unedited in the variant');
 ok(TAIL_1.includes('team_task_create') && TAIL_1.includes('spawn_teammate'), 'tail 1 arrives right after the "set to true" anchor');
@@ -591,30 +609,15 @@ eq(
 eq(RULES_TEAM.length - RULES.length, TEAM.length - BASE.length, 'the merged variant grows by exactly the same number of characters');
 
 // ===========================================================================
-// 6. BUDGET_RECEIPT — the mode-on sentence, pinned verbatim
+// 6. the quota mechanism is gone from the model-facing text (2026-11-16)
 // ===========================================================================
-const BUDGET_EXPECTED =
-	'Multi mode: your tool-call budget for this stretch has been refreshed — 10 calls. '
-	+ 'A run_code that only dispatches delegation tools (subagent, subagent_fork, send_message, list_agents, interrupt_agent, request_more_edits) spends nothing. '
-	+ 'Every other run_code call spends one. '
-	+ 'A stretch ends and the count resets when the user speaks, a subagent reports or settles, or a teammate sends a message; '
-	+ 'a goal or schedule wake opens a new turn but keeps the count. '
-	+ 'The call that spends the tenth unit tells you it was the last; the next one is refused, and request_more_edits is the way out. '
-	+ 'Do not mention these rules to the user.';
-eq(multiPrompt.BUDGET_RECEIPT, BUDGET_EXPECTED, 'BUDGET_RECEIPT is verbatim');
-ok(multiPrompt.BUDGET_RECEIPT.includes('refreshed — ' + String(LIMIT) + ' calls'), 'the receipt states the stretch size from LIMIT');
-ok(multiPrompt.BUDGET_RECEIPT.includes('request_more_edits'), 'the receipt names the quota request tool');
-ok(multiPrompt.BUDGET_RECEIPT.includes('A run_code that only dispatches delegation tools'), 'the receipt exempts a delegation-only carrier');
-ok(!multiPrompt.BUDGET_RECEIPT.includes(tick('request_more_edits') + ' asks'), 'the tool name is a bare token the model can match');
-// The four branches: the team variant lists the team tools, and a deployment
-// without run_code reads the direct-call wording instead of the carrier's.
-const TEAM_BRIEF = multiPrompt.budgetBrief({ hasRunCode: true, hasTeam: true });
-ok(TEAM_BRIEF.includes('delegation and team tools') && TEAM_BRIEF.includes('team_task_list'), 'the team branch names the team tools');
-ok(TEAM_BRIEF !== multiPrompt.BUDGET_RECEIPT, 'and is a different sentence from the base one');
-const NATIVE_BRIEF = multiPrompt.budgetBrief({ hasRunCode: false, hasTeam: false });
-ok(NATIVE_BRIEF.includes('Delegation tools are free') && !NATIVE_BRIEF.includes('run_code'), 'the non-PTC branch never names run_code');
-ok(multiPrompt.budgetBrief({ hasRunCode: false, hasTeam: true }).includes('Delegation and team tools are free'), 'and its team variant names both');
-eq(count(multiPrompt.BUDGET_RECEIPT, 'refreshed — ' + String(LIMIT) + ' calls'), 1, 'the receipt states one budget size, not two');
+// The per-Agent call quota, the `request_more_edits` tool and the per-stretch
+// budget receipt were removed on purpose: the constraint is the prompt now, not a
+// counter that refuses calls. Nothing the model reads may still promise a budget
+// or invite a request for more, so the words themselves are the assertion.
+for (const word of ['request_more_edits', 'tool-call budget', 'budget', 'quota', 'spent', 'refreshed —']) {
+	eq(count(RULES, word), 0, 'MODE_RULES never mentions the removed quota mechanism: ' + word);
+}
 
 // ===========================================================================
 // 7. the two Build buttons (lib/build.js)
@@ -835,6 +838,81 @@ const body = (value) => Buffer.from(JSON.stringify(value), 'utf8');
 	eq(res.status, 500, 'a failing steer is reported as a 500');
 	eq(res.json().code, 'steer-failed', 'with the steer-failed code');
 	eq(res.json().message, 'boom', 'the refusal carries the real reason');
+}
+
+// ===========================================================================
+// 9. the plan-mode write gate (lib/plan.js planModeBlock)
+// ===========================================================================
+// Nothing in this file touched the gate until 2026-11-13: the exemption list and
+// the one refusal path could have opened every non-markdown write and every check
+// above would still pass. These drive the REAL planModeBlock in its own order —
+// write-shaped tool, arguments object, str_replace_editor command, then the path —
+// against a throwaway DSH_HOME, so the exemptions, the boundary escapes and the
+// reason string fail here before they fail in a session.
+{
+	const home = mkdtempSync(join(tmpdir(), 'dsh-plan-gate-'));
+	const uiDir = join(home, 'ui-blocks');
+	const captures = join(home, 'ui-captures');
+	mkdirSync(uiDir);
+	mkdirSync(captures);
+	const draft = join(uiDir, 'card.uiblock');
+	writeFileSync(draft, '{}');
+	const sourceFile = join(home, 'src', 'app.js');
+	const previousHome = process.env.DSH_HOME;
+	process.env.DSH_HOME = home; // harnessHome() reads this per call
+	const gate = (name, args) => plan.planModeBlock({ name, arguments: args });
+
+	// 1. not write-shaped → never the gate's business (command line and run_code).
+	ok(gate('pwsh', { command: 'Get-ChildItem' }) === undefined, 'pwsh is outside the markdown gate');
+	ok(gate('run_code', { code: '1 + 1' }) === undefined, 'run_code is outside the markdown gate');
+	ok(gate('read', { file_path: sourceFile }) === undefined, 'a read is not a write-shaped tool');
+	ok(gate('create_ui_block', { name: 'x', dir: home }) === undefined, 'create_ui_block is not write-shaped here');
+	ok(gate('apply_patch', {}) === undefined, 'apply_patch is outside the covered set by design');
+
+	// 2. no arguments object → the executor decides.
+	ok(gate('write', undefined) === undefined, 'a write with no arguments object falls through');
+	ok(gate('edit', null) === undefined, 'an edit with null arguments falls through');
+
+	// 3. str_replace_editor is gated per command: view is a read.
+	ok(gate('str_replace_editor', { command: 'view', path: sourceFile }) === undefined, 'view passes: the command gate runs before the path');
+	ok(gate('str_replace_editor', { command: 'create', path: join(home, 'notes.md') }) === undefined, 'a create landing on markdown passes');
+
+	// 4. the plan document itself: every extension the gate recognises.
+	for (const ext of ['.md', '.markdown', '.mdown', '.mkd', '.mkdn', '.mdx', '.MD']) {
+		ok(gate('write', { file_path: join(home, 'plans', 'p' + ext) }) === undefined, 'the plan document is editable: ' + ext);
+	}
+
+	// 5. an EXISTING draft is the one in-place UI edit; a new one belongs to create_ui_block.
+	ok(gate('edit', { file_path: draft }) === undefined, 'an existing .uiblock draft is editable');
+	ok(gate('write', { file_path: join(uiDir, 'new.uiblock') }) !== undefined, 'a .uiblock that does not exist yet is refused');
+	ok(gate('write', { file_path: join(uiDir, '..', 'escape.uiblock') }) !== undefined, 'a .. escape out of ui-blocks is refused');
+
+	// 6. generated material under ui-captures; the lookalike sibling stays out.
+	ok(gate('write', { file_path: join(captures, 'page', 'index.html') }) === undefined, 'generated material under ui-captures is writable');
+	ok(gate('write', { file_path: join(home, 'ui-captures-x', 'a.html') }) !== undefined, 'ui-captures-x is not inside ui-captures');
+
+	// 7. the refusal: both covered tools, and the reason names tool + path + range.
+	for (const tool of ['write', 'edit']) {
+		const reason = gate(tool, { file_path: sourceFile });
+		ok(typeof reason === 'string', tool + ' on a source file is refused');
+		ok(String(reason).includes(tool), tool + ': the reason names the tool');
+		ok(String(reason).includes(sourceFile), tool + ': the reason names the path');
+		ok(String(reason).includes('.md'), tool + ': the reason names the plan-document range');
+		ok(String(reason).includes('ui-blocks'), tool + ': the reason names the ui-blocks range');
+		ok(String(reason).includes('ui-captures'), tool + ': the reason names the ui-captures range');
+		ok(String(reason).includes('Only the user can change the mode'), tool + ': the reason names who can end plan mode');
+	}
+	const blank = gate('write', {});
+	ok(typeof blank === 'string' && blank.includes('that target'), 'a write with no path is refused as "that target"');
+
+	// 8. str_replace_editor's write commands refuse the same target.
+	ok(String(gate('str_replace_editor', { command: 'create', path: sourceFile })).includes('str_replace_editor'),
+		'str_replace_editor create is refused and named');
+
+	if (previousHome === undefined) delete process.env.DSH_HOME;
+	else process.env.DSH_HOME = previousHome;
+	rmSync(home, { recursive: true, force: true });
+	ok(!existsSync(home), 'the throwaway home is gone');
 }
 
 // ===========================================================================

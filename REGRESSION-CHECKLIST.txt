@@ -22,8 +22,9 @@ dsh-cursor-modes 全量回归测试清单
   lib/prompts.js    0.2.7 把「当前模式由最新一条用户消息里的标记决定」改为
                     「由最新的 runtime-context 快照决定，该快照在压缩后重建」
   package.json      version 0.2.6 -> 0.2.7
-  其余 lib 文件（index/plan/state/multi/gate/switch/routes/build/settings/planfile 以外的 18 个）
-  与 routes.js、build.js、gate.js、plan.js、state.js 等全部哈希相同。
+  其余 lib 文件与 routes.js、build.js、plan.js、state.js 等全部哈希相同。
+  （2026-11-16 更新：标记不再走 runtime-context 快照，改由 agent/pre-step 在每条用户
+    消息之后追加；额度机制整段删除，lib/gate.js 与 self-check-gate.mjs 已不存在。）
 
 【2. 跑的顺序】
 
@@ -32,7 +33,6 @@ dsh-cursor-modes 全量回归测试清单
   S0 自检脚本
      在实例插件体目录里依次执行（不要在本归档目录跑，理由见 CM-H-10）：
        cd “<实例>\profiles\web\.dsh-launcher-plugin-bodies\dsh-cursor-modes”
-       node self-check-gate.mjs
        node self-check-policy.mjs
        node self-check-runtime.mjs
        node self-check-bridge.mjs
@@ -142,10 +142,10 @@ dsh-cursor-modes 全量回归测试清单
   期望：cursorPlan:policy（order 502）渲染的整段文本在三种模式下逐字节一致；mode:policy（order 501）渲染空串。
   源码：lib/prompts.js:68-149（MODE_RULES 常量）+ lib/prompts.js:195-199（policyText 忽略入参）+ lib/multi.js:269-277（501 保活为空）
 
-[CM-B-02] 当前模式靠尾部 runtime-context 标记传递
-  操作：切到 plan，看请求上下文快照的尾部。
-  期望：出现 <当前模式>plan</当前模式>；multitask 时写 <当前模式>multitask</当前模式>（不是 multi）；default 时写 default。位置在快照末尾（本插件 order 220，WORKING_DIRECTORY 100、WEB_SURFACE 210 都在它之前）。
-  源码：lib/index.js:227-238（systemPrompt.context order 220 + 三分支文案）
+[CM-B-02] 当前模式靠一条紧跟最新用户消息的标记传递
+  操作：切到 plan 并发一句话，看会话日志里这条用户消息之后的最后一条 user/message。
+  期望：出现 <当前模式>plan</当前模式>；multitask 时写 <当前模式>multitask</当前模式>（不是 multi）；default 时写 default。它是一条 source.kind='dsh-cursor-modes' 的普通用户消息，由 agent/pre-step 的 ensureModeMarker 追加在最新一条用户消息之后；不是 systemPrompt.context，也不出现在系统提示的任何位置。
+  源码：lib/state.js（ensureModeMarker / modeMarkerText / markerAfterLatestUser）+ lib/index.js（agent/pre-step 末尾调用）
 
 [CM-B-03] 标记与闸门读同一个源
   操作：切到 plan 后立刻调用一次 write，目标为非 .md 路径。
@@ -154,7 +154,7 @@ dsh-cursor-modes 全量回归测试清单
 
 [CM-B-04] 前缀稳定性：一次切换不重写系统提示前缀
   操作：在 plan 与 default 之间来回切两次，对比两次请求的系统提示前缀，或看供应商报告的 cached prompt tokens。
-  期望：系统提示前缀逐字节相同并继续命中缓存；变化的只有尾部 runtime-context 一条。
+  期望：系统提示前缀逐字节相同并继续命中缓存；变化的只有最新一条用户消息之后那一条标记消息。
   源码：lib/index.js:216-226（stable prefix 的设计说明：mode 不进 section）+ lib/plan.js:340-344
 
 [CM-B-05] 三个 section 的顺序：500 / 501 / 502
@@ -172,15 +172,15 @@ dsh-cursor-modes 全量回归测试清单
   期望：挂了的文本多出三句，分别锚在 “set to `true`.”、“you will be notified when the subagent completes.”、“not about maximizing the number of parallel agents.” 之后；未挂的一处都没有，基础常量里不含 team 措辞。
   源码：lib/plan.js:353（spawn_teammate 分支）+ lib/multi-prompt.js:42-70（TEAM_TAILS 三处锚点拼接）
 
-[CM-B-08] 预算回执只在进入 multitask 时附带
+[CM-B-08] 切换通知只有一句，进 multi 也不再附带预算回执
   操作：default -> plan 切一次；再 plan -> multitask 切一次。
-  期望：第一次通知只有一句 “The user switched this session to plan mode.”；第二次是 “…from plan mode to multitask mode.” 再加一段预算说明，以 “Multi mode: your tool-call budget for this stretch has been refreshed — 10 calls.” 开头，末尾是 “Do not mention these rules to the user.”。
-  源码：lib/switch.js:135-147（compositeNoticeText 三分支，仅 multi 追加 budgetBrief）+ lib/multi-prompt.js:105-116
+  期望：两次通知都只有一句——“The user switched this session to plan mode.”、“The user switched this session from plan mode to multitask mode.”；2026-11-16 起不再追加任何预算说明（额度机制已删）。
+  源码：lib/switch.js（compositeNoticeText 三个分支，不再有 caps 参数）+ lib/multi-prompt.js（budgetBrief / BUDGET_RECEIPT 已删）
 
-[CM-B-09] 压缩之后标记仍然可读（版本差异条目）
+[CM-B-09] 压缩之后标记由 pre-step 自动补回
   操作：在 plan 模式里连续对话触发上下文压缩，压缩后再发一句普通问题。
-  期望：[0.2.7·仅4000] 压缩后最新 runtime-context 快照里仍有 <当前模式>plan</当前模式>，模型仍按 plan 规则行事；[归档 0.2.6 / 3080] 规则原文写「由最新一条用户消息里的标记决定」，压缩后若最新用户消息不含标记，按旧文案会退化为 default —— 记下实际观察，在 3080 判 PARTIAL/待观察，不算 4000 的失败。
-  源码：归档 lib/prompts.js:72（最新一条用户消息）／4000 lib/prompts.js:72（最新 runtime-context 快照，压缩后重建）+ lib/index.js:233-237（标记由 context hook 每步重算）
+  期望：压缩把历史里的 <当前模式>plan</当前模式> 折掉之后，下一次 pre-step 在最新用户消息之后补一条同样的标记，模型仍按 plan 规则行事；不需要靠「模型自己挑最新一条」。
+  源码：lib/state.js（ensureModeMarker：本步没递送用户消息时回看 deriveMessages，找不到一致标记就追加）+ lib/prompts.js（## 当前模式 前言：更早的标记一律作废）
 
 ======================================================================
 四、计划模式与计划卡片　CM-C
@@ -267,79 +267,34 @@ dsh-cursor-modes 全量回归测试清单
   源码：lib/state.js:243-246（buildOnly 分支不发通知）+ lib/switch.js:61-75（isBuildClick 依赖无引号 summary）+ lib/build.js:157（summary 与正文的引号差异）
 
 ======================================================================
-五、多任务模式与配额　CM-D
+五、多任务模式与委派　CM-D
 ======================================================================
 
-本节所有条目在 Cursor Multi 模式下进行。配额按「一趟（stretch）」计：用户说话、子代理回报或
-队友消息会开新一趟，goal/schedule 唤醒不算。基础 10 次，批准一次加 5 次。
+本节所有条目在 Cursor Multi 模式下进行。2026-11-16 起 multi 没有工具调用配额：
+没有「这一趟还能用几次」、没有 request_more_edits、没有耗尽提示与拒绝。约束只有
+提示词——前台只做三件事：回答不需要工具的问题、派单、把结果折成一句。
 
-[CM-D-01] 进入 multi 时收到预算回执
+[CM-D-01] 进入 multi 不再出现预算回执
   操作：从 default 或 plan 切到 Cursor Multi，然后发一条用户消息。
-  期望：该步的上下文里出现一条通知，以 “Multi mode: your tool-call budget for this stretch has been refreshed — 10 calls.” 开头；因为本部署挂了 run_code，正文是 PTC 说法（“A run_code that only dispatches delegation tools (…) spends nothing. Every other run_code call spends one.”）；结尾有 “Do not mention these rules to the user.”；这就是本趟的唯一预算回执，之后不再重复。
-  源码：lib/gate.js:400-402（wakeNoticeText）+ lib/multi-prompt.js:105-116（budgetBrief 四分支）+ lib/multi.js:239-247（commitMultiMode 只在真实刷新时附回执）
+  期望：该步上下文里只有切换通知与模式标记；不出现任何 "your tool-call budget …"、"refreshed"、"Granted" 之类文案，工具目录里也没有 request_more_edits。
+  源码：lib/multi.js（wireMulti 只剩 501 空槽）+ lib/multi-prompt.js（只剩 MULTI_ID / TEAM_TAILS / withTeamTails）+ lib/switch.js（compositeNoticeText 不再追加预算行）
 
-[CM-D-02] 花掉第 10 次时附一条耗尽提示
-  操作：在 multi 模式下连续做 10 次非委派调用（例如 10 次 read）。
-  期望：第 10 次的工具结果上附带一条通知，正文以 “You are in multi mode and this stretch's tool-call budget is used up.” 开头，说明只有委派类调用不花钱、并点名 request_more_edits；同一趟只会出现一次（latch 生效）。
-  源码：lib/gate.js:222-235（chargeRoot 在 size === quota 时置 warned/pendingNotice）+ lib/multi.js:166-173（attachQuotaNotice）+ lib/gate.js:410-412（blockedText）
+[CM-D-02] 模式标记紧贴最新一条用户消息
+  操作：在同一个会话里连续发三条消息，每条之后看会话日志里最后一条 user/message 的来源与正文。
+  期望：每条用户消息之后都有一条 source.kind='dsh-cursor-modes' 的 user 消息，正文是一行 <当前模式>X</当前模式>（multi 拼成 multitask）；同一条用户消息之后只出现一条；模型自己跑工具的那些步不重复追加。
+  源码：lib/state.js（ensureModeMarker / modeMarkerText / markerAfterLatestUser）+ lib/index.js（agent/pre-step 末尾调用）
 
-[CM-D-03] 第 11 次非委派调用被拒
-  操作：紧接 CM-D-02，再做一次 write 或 read。
-  期望：该调用被拒，理由以 “This is multi mode's tool-call gate, not a broken tool. ” 开头，后接同一段耗尽说明；被拒的调用不计入配额（post-execute 不再加一次）。
-  源码：lib/gate.js:415-417（denyReason）+ lib/index.js:277-283（deny 直接返回）+ lib/multi.js:198-205（为什么在 pre-execute 计数）
+[CM-D-03] 标记与模式不一致时补一条，压缩之后自动补回
+  操作：在 plan 模式里触发一次上下文压缩，压缩后再发一句话；另可在会话里植入一条旧的 default 标记观察下一步。
+  期望：压缩把旧标记折掉之后，下一次 pre-step 补出一条与新模式一致的标记；历史里更早的标记一律作废（规则文本已这么写）。补的是「缺失/不一致」的情况，模式没变且标记仍在时不重复。
+  源码：lib/state.js（ensureModeMarker 的 delivered / markerAfterLatestUser 两个分支）+ lib/prompts.js（## 当前模式 前言）
 
-[CM-D-04] 委派类调用不花钱，且配额耗尽后仍能委派
-  操作：先用满 10 次，再调用 subagent 派一个后台 worker；随后用 send_message 追问一次。
-  期望：subagent 与 send_message 都不被拒、也不增加计数（计数仍是 10）；这是配额耗尽后唯一还能用的出口。
-  源码：lib/gate.js:57-70（EXEMPT_TOOLS：subagent/subagent_fork/send_message/list_agents/interrupt_agent/team_*/request_more_edits）+ lib/index.js:277-279
-
-[CM-D-05] run_code 载体本身免费，按内部派发结算
-  操作：在 multi 模式下用 run_code 写一个只 dispatch 了 subagent 的程序；再写一个 dispatch 了 read 的程序。
-  期望：只委派的那个 run_code 全程不花钱（计数不变）；dispatch 了非委派工具的那个只记 1 次（不是 1+1）；被拒的是程序里的那次子调用，程序本身继续跑。
-  源码：lib/gate.js:252-285（decideEdit：run_code 记 provisional，子调用里第一次非豁免即计费）+ lib/gate.js:287-314（settleRoot）
-
-[CM-D-06] 纯计算的 run_code 记 1 次（可超额，不拒）
-  操作：配额已用满 10 次时，用 run_code 跑一段不 dispatch 任何工具的计算。
-  期望：该 run_code 不报错、结果正常返回；本趟计数变成 11（超过 10），因为这是结算不是判决；不产生拒绝。
-  源码：lib/gate.js:300-314（settleRoot：sawDelegate 免费、无子调用则 charge 一次，已跑完的调用即使超额也只记录）+ lib/multi.js:186-190（settleExec）
-
-[CM-D-07] request_more_edits 在额度用尽后批准并重新武装提示
-  操作：配额用尽后调用 request_more_edits，reason 填一句非空说明。
-  期望：返回 {granted:true, extra:5, …}，渲染文本 “Granted: 5 more calls in this stretch.”；随后的调用计数继续累加，上限变 15；再花到第 15 次时**重新**出现一次耗尽提示（grantExtra 会清 warned）；这一趟的预算上限跟着 grant 走，不需要重新进入模式。
-  源码：lib/gate.js:372-377（decideRequest）+ lib/gate.js:209-212（grantExtra 清 warned）+ lib/multi.js:333-351（execute 读同一 gate）
-
-[CM-D-08] 额度没用完时请求被拒，并报出用量
-  操作：在只用了 3 次时调用 request_more_edits，reason 非空。
-  期望：返回 {granted:false, note:"quota-not-spent", spent:3, quota:10}，渲染文本以 “Not yet: this stretch's tool-call budget is not used up (3 of 10 used).” 开头。
-  源码：lib/gate.js:375（spent < quota 分支）+ lib/gate.js:429-431（quotaNotSpentReason）
-
-[CM-D-09] 空 reason 被拒
-  操作：调用 request_more_edits，reason 传空串或全是空格。
-  期望：返回 note:"blank-reason"，渲染文本 “`request_more_edits` needs a `reason`: why you are not delegating this, and how far you will take it yourself.”；不授予任何额度。
-  源码：lib/gate.js:374（reviewRequest 失败分支）+ lib/gate.js:420-422（blankReasonReason）
-
-[CM-D-10] 非 multi 模式下调用 request_more_edits 是普通回答，不是错误
-  操作：在 default 或 plan 模式下调用 request_more_edits（工具在那里也可见）。
-  期望：返回 {granted:false, note:"not-multi"}，渲染文本 “`request_more_edits` only applies in multi mode. The current mode is not multi, so nothing was granted.”；不是 deny、不是异常、不扣配额。
-  源码：lib/gate.js:373（mode !== MULTI_ID 分支）+ lib/gate.js:434-436（notMultiReason）+ lib/multi.js:257-263（工具无条件注册的理由）
-
-[CM-D-11] 哪些唤醒会重置配额
-  操作：依次触发：用户发消息、后台子代理回报、goal 唤醒、日程（schedule）唤醒，各看计数。
-  期望：用户消息、子代理回报（agent-message / subagent-settled）、队友消息（team-message）会清零并丢掉已批准的 surplus；goal 与 schedule 虽然开了新回合但**不**清零（计数保留，防止定时器白拿一趟）。
-  源码：lib/gate.js:94（RESET_SOURCES）+ lib/gate.js:101（NON_RESET_SOURCES）+ lib/gate.js:178-186（rollTurn）+ lib/multi.js:284-286（agent/inbox/claimed 记 wake）
-
-[CM-D-12] 配额按 agent 计，不跨 agent 共享
-  操作：在同一个会话里让一个子代理也进入 multi 语义的调用（或人工构造第二个 agent），观察两边计数。
-  期望：两个 agent 各自有独立计数，互不清零、互不继承；计数键是 Agent 对象而不是 session.id。
-  源码：lib/gate.js:126-138（initState）+ lib/multi.js:80-87（gateOf 以 Agent 为键）+ lib/state.js:79（quota 为 WeakMap<Agent>）
-
-[CM-D-13] 团队工具同样免费（只在挂 Agent Teams 的实例）
-  操作：在挂载 team_task_* / spawn_teammate 的实例上，用满 10 次后调用团队工具。
-  期望：团队工具（spawn_teammate、wait_agent、team_task_create/list/get/update）都不计费；预算回执与工具描述的措辞也会变成「含团队工具」的那一版。
-  源码：lib/gate.js:57-70（同一张 EXEMPT 表覆盖两个包）+ lib/multi-prompt.js:112-115（hasTeam 分支文案）+ lib/switch.js:101-110（capsOf 探测 team_task_list）
-
+[CM-D-04] 前台只派单，不自己动手
+  操作：在 multi 模式下给一句「改一处文案」这类小活。
+  期望：模型派一个 worker（chip 上出现子代理）并结束这一轮，不再自己 read/edit；回来只给一句中文汇报（改了什么、成不成、下一步）。验收条件写在派单里。
+  源码：lib/prompts.js（MODE_RULES 的 multitask 一节：这个模式下你不自己动手 / 例外只有两条 / 派完就停 / 你不复核）
 ======================================================================
-六、三个模型可见工具　CM-E
+六、两个模型可见工具　CM-E
 ======================================================================
 
 [CM-E-01] create_plan 的参数 schema
@@ -351,11 +306,6 @@ dsh-cursor-modes 全量回归测试清单
   操作：看一次成功调用的结构化返回值。
   期望：输出对象 additionalProperties:false，必填 title、path、todos 三项；todos 项结构与参数侧同构；少任何一项都会在 wire 层失败（这正是清单以前「凭空消失」的原因）。
   源码：lib/plan.js:406-452（output.schema + render）
-
-[CM-E-03] request_more_edits 的 schema 与四种回答
-  操作：查看定义并各触发一次：批准、not-multi、blank-reason、quota-not-spent。
-  期望：参数只有 reason（必填字符串）；输出 additionalProperties:false，必填 granted 与 extra，可选 note 枚举 not-multi|blank-reason|quota-not-spent、spent、quota；四种回答全部是普通结果，没有 deny、没有抛错。
-  源码：lib/multi.js:297-332（parameters + output.schema + render 四分支）+ lib/gate.js:372-377
 
 [CM-E-04] list_running_agent 的 schema
   操作：查看工具定义；分别以 include_descendants=false / true 各调一次。
@@ -372,10 +322,10 @@ dsh-cursor-modes 全量回归测试清单
   期望：抛错 “list_running_agent requires the live Agent registry”；没有 agent 时抛 “list_running_agent requires a calling agent (exec.agent was undefined)”；两种都是给模型的明确错误，不是空数组。
   源码：lib/list-running-agent.js:74-88（exec.agent / host.get('agents') 两条检查）
 
-[CM-E-07] 三个工具在所有模式下都可见
+[CM-E-07] 两个工具在所有模式下都可见（第三个工具已随额度删除）
   操作：分别在 default / plan / multitask 下查看工具目录。
-  期望：create_plan、request_more_edits、list_running_agent 三种模式下都在目录里，schema 逐字节相同；模式只改变闸门与回答，不改变目录（目录一变就会从第一个变化的 schema token 起冲刷 KV 缓存）。
-  源码：lib/plan.js:328-335（无条件注册的理由）+ lib/multi.js:257-263 + lib/index.js:210-214（list_running_agent 与另两个同组注册）
+  期望：create_plan、list_running_agent 三种模式下都在目录里，schema 逐字节相同；request_more_edits 在目录里不存在；模式只改变闸门，不改变目录（目录一变就会从第一个变化的 schema token 起冲刷 KV 缓存）。
+  源码：lib/plan.js（create_plan 无条件注册的理由）+ lib/index.js（list_running_agent 与它同组注册）+ self-check-runtime.mjs（目录断言）
 
 [CM-E-08] list_running_agent 属于本包，不在官方包里
   操作：在实例里检查 @deepseek-ai/dsh-tool-subagent-control 的 lib/types/list-agents.js 是否被改过。
@@ -490,24 +440,19 @@ allowConfidence: 0.8、workReject: 0.5（这些在 llm 后端下不参与判定�
 下表的「上次记录」取自 4000 的 _reports\plandoc\*.mjs.log（2026-10-29，0.2.6），
 只作参照；每次大测试必须重跑，并记录本次实测数字。
 
-[CM-H-01] self-check-gate.mjs：配额机器的纯逻辑
-  操作：在实例插件体目录执行 node self-check-gate.mjs。
-  期望：退出码 0，末行 “self-check-gate: <N> passed, 0 failed”（上次记录 621/0）；它断言的东西：豁免表逐项、RESET/NON_RESET 两个集合（含 agent-message 与 subagent-settled 的区分）、PTC 三段计费、四种 request_more_edits 回答、耗尽与授予文案逐字。任何一条红都意味着模型看到的预算语义变了。
-  源码：self-check-gate.mjs:1-33（无框架、只断言真实行为）+ lib/gate.js:57-70,94,101,252-314
-
 [CM-H-02] self-check-policy.mjs：提示词文本被冻结
   操作：执行 node self-check-policy.mjs。
-  期望：退出码 0，末行 “self-check-policy: <N> passed, 0 failed”（上次记录 378/0）；Build in Default 那段指令的 sha256 被写死在断言里，文案改一个字就红；同时断言 MODE_RULES 的三段互斥措辞与 team tail 拼接位置。
+  期望：退出码 0，末行 “self-check-policy: <N> passed, 0 failed”（2026-11-16 实测 423/0）；Build in Default 那段指令的 sha256 被写死在断言里，文案改一个字就红；同时断言 MODE_RULES 三段互斥措辞、multitask 一节的新脊梁句、三个 team tail 锚点各命中一次、以及额度字样彻底不在提示词里。
   源码：self-check-policy.mjs:19-26（冻结哈希与「改一个字就红」的意图）+ lib/build.js:106-144（被冻结的文本来源）
 
 [CM-H-03] self-check-runtime.mjs：在真 apply() 上数注册点
   操作：执行 node self-check-runtime.mjs。
-  期望：退出码 0，末行 “self-check-runtime: <N> passed, 0 failed”（上次记录 297/0）；它断言 pre-step 恰好 1 个、pre-execute 恰好 1 个、post-execute 恰好 1 个（合并后不允许再有第二个监听），8 条路由表与 makeRoutes 的参考表逐条相等，三个工具的 schema 与描述对得上；输出里会出现几行 delegation gate allow=… 的样例日志（正常）。
+  期望：退出码 0，末行 “self-check-runtime: <N> passed, 0 failed”（2026-11-16 实测 287/0）；它断言 pre-execute 恰好 1 个、post-execute 恰好 1 个（合并后不允许再有第二个监听），没有 systemPrompt.context 注册（标记改由 pre-step 追加），标记在「缺失」时补一条、在「一致」时不追加、异模式补一条、压缩折掉后补回，plan 写闸仍拦非豁免写，两个工具的 schema 与描述对得上；输出里会出现几行 delegation gate allow=… 的样例日志（正常）。
   源码：self-check-runtime.mjs:1-16（「一个挂载点」的意图）+ lib/index.js:10-28（注册面清单）+ lib/routes.js:290-303（参考表）
 
 [CM-H-04] self-check-bridge.mjs：9 条路由与每个拒绝分支
   操作：执行 node self-check-bridge.mjs。
-  期望：退出码 0，末行 “self-check-bridge: <N> passed, 0 failed”（上次记录 464/0）；路由按**名字**逐条比对（少一条或改到旧前缀都算红，不是「数量对不对」）；403/405/400/409/500 每个分支都用真 handler + 假 IncomingMessage 走一遍；值域从 plan/multi 与 cursorPlan/cursorMulti 两套词表各测一遍；且它会吃一个 gzip 压缩的判官回答（回归 askJev 的解压分支）。
+  期望：退出码 0，末行 “self-check-bridge: <N> passed, 0 failed”（2026-11-16 实测 465/0）；路由按**名字**逐条比对（少一条或改到旧前缀都算红，不是「数量对不对」）；403/405/400/409/500 每个分支都用真 handler + 假 IncomingMessage 走一遍；值域从 plan/multi 与 cursorPlan/cursorMulti 两套词表各测一遍；且它会吃一个 gzip 压缩的判官回答（回归 askJev 的解压分支）。
   源码：self-check-bridge.mjs:1-27（为什么每条断言都为了某个具体原因失败）+ :29-41（gz/gzip 夹具）+ lib/routes.js:4-11（9 条路由清单）
 
 [CM-H-05] self-check-fold.mjs：投影迁移三层——Layer 2 现状是红的
@@ -535,9 +480,14 @@ allowConfidence: 0.8、workReject: 0.5（这些在 llm 后端下不参与判定�
   期望：state 探针断言：折叠只发生在「有运行行且有空闲行」时、卡片位置紧跟在最后一个运行行之后、展开态不记忆；stress 探针断言：高压重绘下 writes 不随渲染增长、熔断在阈值处触发、不会自激。二者红了意味着 DSH 的 DOM 契约（[role="tree"]、[role="treeitem"][aria-level]、[data-state="ongoing"]）变了，而折叠本身是「骑」在这个契约上的。
   源码：4000 版 lib/client.js:1748-1751（框架契约与探针分工的注释）+ tools/panel_state_probe.cjs、tools/panel_stress_probe.cjs
 
-[CM-H-10] 自检必须在实例插件体目录里跑，不在归档目录跑
-  操作：先在归档目录 DSH自研插件\dsh-cursor-modes 执行 node self-check-gate.mjs，再到实例插件体目录执行同一个脚本。
-  期望：归档目录里因为 @deepseek-ai/* 解析不到而报 MODULE_NOT_FOUND（环境问题，判 BLOCKED，不算 FAIL）；实例插件体目录里正常跑完并打印汇总行；解析路径是 profiles\web\node_modules，插件体自己不带 node_modules。
+[CM-H-10] 自检在哪跑：仓库根需要一根指向实例依赖树的 node_modules junction
+  操作：在归档目录 DSH自研插件\dsh-cursor-modes 执行 node self-check-policy.mjs，再在实例插件体目录执行同一个脚本。
+  期望：插件体目录里正常跑完并打印汇总行（那边解析 profiles\web\node_modules，插件体自己不带 node_modules）。
+  归档目录本身没有 node_modules，缺这棵树时 node 直接报 ERR_MODULE_NOT_FOUND: Cannot find package '@deepseek-ai/dsh-llm'
+  （从 lib/build.js 请求；环境问题，判 BLOCKED，不算 FAIL）。实测：把 junction 移走后 policy 与 runtime 都是这条报错；
+  恢复后 policy 423/0、runtime 288/0 全绿。从仓库根跑自检需要这根 junction，重建命令（在 dsh-cursor-modes 目录下，普通权限即可）：
+    cmd /c mklink /J node_modules "D:\DSH Pack Launcher\dsh-packs\dsh-origin-3080\profiles\node_modules"
+  node_modules/ 已在 .gitignore 里，不进版本控制；它不是构建产物，删了不影响插件运行，只影响「从归档目录跑自检」。
   源码：dsh-cursor-modes/package.json（无实体依赖树，只有 peerDependencies）+ 实例目录结构 profiles\web\node_modules 与 .dsh-launcher-plugin-bodies\dsh-cursor-modes 的相邻关系
 
 ======================================================================
@@ -639,12 +589,12 @@ K5. 3080 的闸门配置里有四个在 llm 后端下不生效的字段
    「当前后端不读这些字段」，要么把无效字段从配置里摘掉。
    相关条目：CM-G-05、CM-G-06、CM-B-08 以外的判定类条目。
 
-K6. 0.2.6 的模式规则文案与实现不符（0.2.7 已改，归档/3080 未跟）
-   归档 lib/prompts.js:72 写「当前模式由最新一条用户消息里的 <当前模式> 标记决定」，但标记实际
-   由 runtime-context 快照携带，而快照在上下文变化或压缩后会重建、可能出现在若干轮之前
-   （lib/index.js:227-237）。旧文案会把「最新用户消息里没有标记」误判成 default。
-   4000 的 0.2.7 已改成「由最新的 runtime-context 快照决定，该快照在压缩后重建」（4000 版
-   lib/prompts.js:72 及三处小节），这正好是 CM-B-09 要测的东西。归档回档时应把这处一并带回。
+K6. 模式标记的载体换过两次（2026-11-16 已定案，本节留作历史）
+  0.2.6：规则写「由最新一条用户消息里的 <当前模式> 标记决定」，但标记由 runtime-context 快照
+  携带，快照在压缩后重建、可能落在若干轮之前 —— 文案与实现对不上（旧问题）。
+  0.2.7（4000）：文案改成「由最新的 runtime-context 快照决定」，对上了快照，但标记仍捆在快照上。
+  现在：标记由 agent/pre-step 的 ensureModeMarker 追加在最新一条用户消息之后，压缩折掉后下一步
+  自动补回；小节限定语也改成「当最新一条用户消息之后的标记为 X 时」。CM-B-09 测的就是这条链路。
 
 K7. cursor-plan.js 里有四个已无调用者的遗留导出，注释仍在描述它们
    grep 结果（只算 .js 运行时）：foldCursorPlan、cursorPlanView、planNoticeId、parseModeArg 在
