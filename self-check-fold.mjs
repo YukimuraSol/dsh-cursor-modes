@@ -41,7 +41,8 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { zstdDecompressSync } from 'node:zlib';
 
@@ -70,8 +71,29 @@ import { legacyFoldSession } from './tools/legacy-fold.mjs';
 // Where the sessions live.
 // ---------------------------------------------------------------------------
 
+// This is a per-box path, so nothing here is baked in: DSH_FOLD_SESSIONS wins,
+// else <DSH_HOME>/sessions — the same resolution lib/plan.js uses (env first,
+// then ~/.dsh).
+const DSH_HOME =
+	process.env.DSH_HOME !== undefined && process.env.DSH_HOME !== ''
+		? process.env.DSH_HOME
+		: join(homedir(), '.dsh');
 const SESSIONS_ROOT =
-	'D:\\DSH Pack Launcher\\dsh-packs\\dsh-fallback-4000\\sessions';
+	process.env.DSH_FOLD_SESSIONS !== undefined && process.env.DSH_FOLD_SESSIONS !== ''
+		? process.env.DSH_FOLD_SESSIONS
+		: join(DSH_HOME, 'sessions');
+
+// Layer 2 sweeps this directory, so a missing one is a setup problem, not a
+// pass and not a silent skip: say what to point it at, then stay red.
+if (!existsSync(SESSIONS_ROOT)) {
+	console.error(
+		`sessions root not found: ${SESSIONS_ROOT}\n` +
+			'This check reads the session files of the instance under test. Point it at one:\n' +
+			'  DSH_HOME=<your DSH_HOME> node self-check-fold.mjs           (reads <DSH_HOME>/sessions)\n' +
+			'  DSH_FOLD_SESSIONS=<sessions dir> node self-check-fold.mjs   (that directory, as is)'
+	);
+	process.exit(1);
+}
 
 // ---------------------------------------------------------------------------
 // Multi-frame zstd decoding (§3.5.2). Three traps, all real:
@@ -257,21 +279,24 @@ console.log(`session files: ${ALL_FILES.length} (${V4_FILES.length} v4, ${ALL_FI
 
 console.log('\n--- Layer 1: golden sessions (hardcoded expectations) ---');
 
+// The ids are placeholders, not sessions: swap in the ids from your own
+// <sessions root> (reachable by the same names the comments describe) before
+// reading this layer as evidence. Until then it stops at "session not found".
 const GOLDEN = [
 	// only a cursorPlan/state@22 {plan} -> plan. Smallest plan-only sample.
-	['session-095d01ed-2265-4f71-95a0-b9ae56e6a4bf', 'plan'],
+	['session-<plan-only>', 'plan'],
 	// only a mode/selected@5 {multi} -> multi. Smallest multi-only sample.
-	['session-05cd4aed-cdcc-4336-9564-f9b8e97e7246', 'multi'],
+	['session-<multi-only>', 'multi'],
 	// plan@5 -> multi@48 -> plan-null@49. THE counterexample: "last seq wins"
 	// takes the later plan-null and answers default. Must be multi.
-	['session-02430976-29d2-48fd-bc9d-a49c46b29c24', 'multi'],
+	['session-<plan-then-multi>', 'multi'],
 	// plan@21 -> plan-null@41. Opened then closed -> default.
-	['session-03679485-4c17-4c95-bfd8-15a43b3728b5', 'default'],
+	['session-<plan-then-null>', 'default'],
 	// plan@5 -> multi@27 -> plan-null@28 -> multi-null@69. Both on at one point,
 	// ends default. Proves the two latches must be independent.
-	['session-5dbbdd96-b9de-4762-9cbd-c47929babedc', 'default'],
+	['session-<both-latches>', 'default'],
 	// plan@24 -> null@48 -> multi@56 -> multi-null@86 -> plan@87 -> null@106.
-	['session-1e8ccb13-6715-41d1-9758-d1b7b6edf022', 'default']
+	['session-<multi-then-null>', 'default']
 ];
 
 for (const [id, want] of GOLDEN) {
@@ -292,19 +317,19 @@ for (const [id, want] of GOLDEN) {
 // ---------------------------------------------------------------------------
 // Layer 1b — the ONLY sample that exercises `plugin:` prefix stripping.
 //
-// session-964b1370 has both a v3 file and a v4 file. The v4 file's 33 legacy
+// session-<v3-and-v4> has both a v3 file and a v4 file. The v4 file's 33 legacy
 // mode events are all rewritten to `plugin:cursorPlan/state` / `plugin:mode/selected`
 // with `ignorable: true`; without the strip those names match nothing and the
 // fold answers `default` while the legacy fold answers `multi`.
 // ---------------------------------------------------------------------------
 
-console.log('\n--- Layer 1b: plugin: prefix stripping (session-964b1370) ---');
+console.log('\n--- Layer 1b: plugin: prefix stripping (session-<v3-and-v4>) ---');
 
-const PREFIX_SAMPLE = 'session-964b1370-ef78-497a-949e-20b24b49b8d2';
+const PREFIX_SAMPLE = 'session-<v3-and-v4>';
 const prefixFiles = findSession(PREFIX_SAMPLE);
 const prefixV3 = prefixFiles.find((file) => /session\.v3\./.test(file));
 const prefixV4 = prefixFiles.find((file) => /session\.v4\./.test(file));
-assert.ok(prefixV3 && prefixV4, 'session-964b1370 must have both a v3 and a v4 file');
+assert.ok(prefixV3 && prefixV4, 'session-<v3-and-v4> must have both a v3 and a v4 file');
 
 const v3Events = readSession(prefixV3).events;
 const v4Events = readSession(prefixV4).events;
@@ -703,14 +728,14 @@ console.log(`  (b) ok  ${strippedThrew} sessions throw /unknown event type/ with
 // The golden counterexample must be one of them — a session whose fold needs
 // the legacy stream is exactly the one that must become unreadable.
 {
-	const [file] = findSession('session-02430976-29d2-48fd-bc9d-a49c46b29c24').filter((f) => /v4/.test(f));
+	const [file] = findSession('session-<plan-then-multi>').filter((f) => /v4/.test(f));
 	const { header, events } = readSession(file);
 	assert.throws(
 		() => restoreReleasedV4Artifact({ header, inheritedEventCount: 0, events }, withoutLegacy),
 		/unknown event type/,
 		'sensitivity check failed on the golden counterexample'
 	);
-	console.log('  (b) ok  golden counterexample session-02430976 throws without registration');
+	console.log('  (b) ok  golden counterexample session-<plan-then-multi> throws without registration');
 }
 
 // ===========================================================================

@@ -193,7 +193,7 @@ dsh-cursor-modes 全量回归测试清单
 
 [CM-C-02] 计划文件落盘的位置与命名
   操作：在 plan 模式里让模型成功调用一次 create_plan（name 用中文，例如 面板折叠迁移）。
-  期望：在 <DSH_HOME>\plans\ 下新增一个 <slug>_<8位十六进制>.plan.md；3080 是 D:\DSH Pack Launcher\dsh-packs\dsh-origin-3080\plans，4000 是 …\dsh-fallback-4000\plans；slug 保留中文，空格变下划线，<>:"/\|?* 变下划线，连续下划线压成一个，首尾下划线去掉，超 100 字符截断。
+  期望：在 <DSH_HOME>\plans\ 下新增一个 <slug>_<8位十六进制>.plan.md；3080 与 4000 各自是那个实例的 <DSH_HOME>\plans；slug 保留中文，空格变下划线，<>:"/\|?* 变下划线，连续下划线压成一个，首尾下划线去掉，超 100 字符截断。
   源码：lib/planfile.js:26-31（plansDir：DSH_HOME/plans）+ lib/planfile.js:45-55（sanitizeName）+ lib/planfile.js:64-66（slug_8hex）
 
 [CM-C-03] frontmatter 的字段与顺序
@@ -486,7 +486,8 @@ allowConfidence: 0.8、workReject: 0.5（这些在 llm 后端下不参与判定�
   归档目录本身没有 node_modules，缺这棵树时 node 直接报 ERR_MODULE_NOT_FOUND: Cannot find package '@deepseek-ai/dsh-llm'
   （从 lib/build.js 请求；环境问题，判 BLOCKED，不算 FAIL）。实测：把 junction 移走后 policy 与 runtime 都是这条报错；
   恢复后 policy 423/0、runtime 288/0 全绿。从仓库根跑自检需要这根 junction，重建命令（在 dsh-cursor-modes 目录下，普通权限即可）：
-    cmd /c mklink /J node_modules "D:\DSH Pack Launcher\dsh-packs\dsh-origin-3080\profiles\node_modules"
+    cmd /c mklink /J node_modules "<DSH_HOME>\profiles\node_modules"
+  把 <DSH_HOME> 换成你实例的包根（本例是 3080 的 dsh-packs\dsh-origin-3080）。
   node_modules/ 已在 .gitignore 里，不进版本控制；它不是构建产物，删了不影响插件运行，只影响「从归档目录跑自检」。
   源码：dsh-cursor-modes/package.json（无实体依赖树，只有 peerDependencies）+ 实例目录结构 profiles\web\node_modules 与 .dsh-launcher-plugin-bodies\dsh-cursor-modes 的相邻关系
 
