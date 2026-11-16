@@ -29,12 +29,31 @@
  * is now checked for presence on both install copies.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
+import { homedir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
-const repo = process.argv[2] ?? 'D:/cursor编程文件/工作区1相关/工作区1/具体项目/DSH自研插件/dsh-cursor-modes'
-const body = process.argv[3] ?? 'D:/DSH Pack Launcher/dsh-packs/dsh-fallback-4000/profiles/web/.dsh-launcher-plugin-bodies/dsh-cursor-modes'
-const nm = process.argv[4] ?? 'D:/DSH Pack Launcher/dsh-packs/dsh-fallback-4000/profiles/web/node_modules/dsh-cursor-modes'
+// Nothing here is baked in: the repo is this file's parent, and the install side
+// is <DSH_HOME>/profiles/<profile> — the layout the launcher uses. Another home or
+// profile: set DSH_HOME / DSH_PROFILE, or pass the three arguments.
+const repo = process.argv[2] ?? resolve(fileURLToPath(new URL('.', import.meta.url)), '..')
+const dshHome = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
+const profile = process.env.DSH_PROFILE?.trim() || 'web'
+const body =
+  process.argv[3] ?? join(dshHome, 'profiles', profile, '.dsh-launcher-plugin-bodies', 'dsh-cursor-modes')
+const nm = process.argv[4] ?? join(dshHome, 'profiles', profile, 'node_modules', 'dsh-cursor-modes')
+
+// A missing install side is a setup problem, not parity: say where to point it.
+for (const [dir, what] of [[body, 'body dir'], [nm, 'node_modules dir']]) {
+  if (!existsSync(dir)) {
+    console.error(`missing ${what}: ${dir}\n` +
+      'Point this at the instance whose copies you are comparing:\n' +
+      '  DSH_HOME=<its home> [DSH_PROFILE=<its profile>] node tools/deploy-parity.mjs\n' +
+      '  or pass them: node tools/deploy-parity.mjs [repoRoot] <bodyDir> <nodeModulesDir>')
+    process.exit(2)
+  }
+}
 
 const sha = (p) => (existsSync(p) ? createHash('sha256').update(readFileSync(p)).digest('hex').slice(0, 12) : 'MISSING')
 

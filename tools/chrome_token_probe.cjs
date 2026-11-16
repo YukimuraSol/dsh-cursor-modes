@@ -24,13 +24,15 @@ const path = require("node:path");
 const PORT = Number(process.argv[2] || 3090);
 const CDP = PORT + 6000;
 const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-const DSH_BIN = process.env.DSH_BIN ||
-  "D:\\OpenCode\\cache\\npm\\_npx\\1e7f6d9597241db0\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js";
+// Point DSH_BIN at the `@deepseek-ai/dsh/lib/bin.js` your own npx cache (or install)
+// carries, e.g. <npx cache>\node_modules\@deepseek-ai\dsh\lib\bin.js. There is no
+// default: a path baked in here only exists on the box it was measured on.
+const DSH_BIN = process.env.DSH_BIN || "";
 // The moon skin's palette values before the label lift (catalog in lib/client.js).
 const BASELINE = { secondary: "#a8bddc", tertiary: "#7e95b8" };
 // DSH_ATTACH=<port>: drive the instance already listening on that port instead of spawning our own.
 // A spawned instance resolves the skin from whatever profile the CLI picks up — on this machine that
-// is the frozen copy under D:\dsh-fallback\plugins, not this repo — so the assertions would test the
+// is the frozen copy under the fallback instance's plugins directory, not this repo — so the assertions would test the
 // wrong skin. Attach to the live instance with DSH_ATTACH=<instance port>; argv[2] then only picks
 // the CDP port (argv[2] + 6000) and the chrome profile dir, so several attach probes can run at once.
 const ATTACH = Number(process.env.DSH_ATTACH || 0);
@@ -44,6 +46,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     url = `http://127.0.0.1:${tok.port || ATTACH}/?token=${tok.token}`;
     console.error(`attach mode: driving the running instance on ${tok.port || ATTACH}`);
   } else {
+    if (!DSH_BIN) {
+      console.error("DSH_BIN is not set: point it at the @deepseek-ai/dsh/lib/bin.js inside your npx cache " +
+        "(e.g. <npx cache>\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js)");
+      process.exit(2);
+    }
     for (const [file, what] of [[CHROME, "chrome"], [DSH_BIN, "dsh bin"]]) {
       if (!fs.existsSync(file)) {
         console.error(`missing ${what}: ${file} (set DSH_BIN to override)`);
