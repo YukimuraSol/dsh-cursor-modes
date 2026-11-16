@@ -5,8 +5,8 @@ Cursor-like mode switching for [DeepSeek Harness](https://github.com/deepseek-ai
 ## What it does
 
 - **Mode switchers** — switch the session between plan-style and execute-style modes without editing config.
-- **Delegation gate** — before a subagent is dispatched, a judge decides whether the task is read-only or not, and either allows it or blocks it. Fail-closed: a judge that cannot answer blocks the dispatch.
-- **Two gate backends** — follow the current session model, or point at a dedicated decision model (e.g. a local gateway).
+- **Delegation gate** — in plan mode, before `subagent` or `send_message` runs, a judge decides whether the task is read-only or not, and either allows it or blocks it. Fail-closed: a judge that cannot answer blocks the dispatch. It stays off until the plugin config sets `gate.enabled`.
+- **Two gate backends** — `llm` (the default) asks the session's own model and needs no credential; `jev` asks a dedicated decision model at `gate.baseUrl` with its own credential (e.g. a local gateway).
 - **Plan mode** — persistent plan cards with an execution checklist.
 - **Per-mode tool policy** — the tool catalog changes with the mode; prompts are kept stable for request-cache reuse.
 - **Multitask mode** — a delegation mode: everything that needs a tool or an edit goes to a background worker, the foreground only answers, dispatches and reports back. There is no call quota to run out of.

@@ -36,7 +36,8 @@
     "lib/list-running-agent.js",
     "lib/preset-derive.js",
     "locale/en.json",
-    "locale/zh.json"
+    "locale/zh.json",
+    "cordis.patch.yml"
   ],
   "dsh": {
     "bundle": {
