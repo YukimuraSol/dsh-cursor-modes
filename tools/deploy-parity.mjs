@@ -27,6 +27,13 @@
  * a file the manifest promises but the install side lacks was never looked at.
  * The shipped manifest (package.json `files` + package.json + cordis.patch.yml)
  * is now checked for presence on both install copies.
+ *
+ * 2026-11-17 — a `files` entry may name a DIRECTORY (`extension/`), and there is
+ * nothing to hash in one: the shipped walk already judges every file inside it.
+ * Hashing the entry itself threw EISDIR in the manifest loop and killed the whole
+ * run before it printed a comparison, so a plugin with a directory in `files`
+ * (dsh-ui-block) read as "crashed" instead of OK or DRIFT. Directory entries are
+ * now skipped and reported as `files[] dir skipped`: contents stay the walk's job.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
@@ -103,8 +110,14 @@ for (const rel of shipped) {
 
 // Promised but not installed: the case the node_modules walk cannot see.
 const seen = new Set(shipped)
+const dirs = []
 for (const rel of manifest()) {
   if (seen.has(rel)) continue
+  // A directory entry has no byte content; the shipped walk above lists its files.
+  if ([repo, body, nm].some((p) => statSync(join(p, rel), { throwIfNoEntry: false })?.isDirectory())) {
+    dirs.push(rel)
+    continue
+  }
   const b = sha(join(body, rel))
   const c = sha(join(nm, rel))
   if (b === 'MISSING' || c === 'MISSING') {
@@ -113,6 +126,7 @@ for (const rel of manifest()) {
   }
 }
 
+for (const rel of dirs) console.log('  files[] dir skipped  ' + rel + '  (contents judged by the shipped walk)')
 if (kept.length > 0) {
   for (const k of kept) console.log('  install-only kept  ' + k.file + '  body=' + k.body + ' nm=' + k.node_modules)
 }
